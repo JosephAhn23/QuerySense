@@ -1,181 +1,169 @@
 # QuerySense
 
-**AI-powered PostgreSQL query performance analyzer**
+Find missing indexes in PostgreSQL EXPLAIN plans.
 
-QuerySense analyzes your PostgreSQL `EXPLAIN ANALYZE` output and identifies performance issues with actionable recommendations. It combines deterministic heuristic rules with LLM-powered explanations to help you understand and fix slow queries.
+## What It Does
 
-## Features
-
-- 🔍 **Detects common performance issues:**
-  - Sequential scans on large tables
-  - Missing indexes
-  - Poor row estimates (bad statistics)
-  - Expensive sorts spilling to disk
-  - Nested loops with high iteration counts
-  
-- 🤖 **AI-powered explanations** that tell you *why* something is slow and *how* to fix it
-
-- 📊 **Works with real EXPLAIN output** - no database connection required for basic analysis
-
-- 🛡️ **Production-grade code** with comprehensive error handling and type safety
-
-## Quick Start
-
-### Installation
-
+Analyzes PostgreSQL `EXPLAIN` output and suggests concrete fixes for performance issues.
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/querysense.git
-cd querysense
+$ python -m querysense.cli.main analyze plan.json
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+Found 1 issue(s):
 
-# Install with development dependencies
-pip install -e ".[dev]"
+[WARNING] Sequential scan on orders (487,293 rows)
+   Sequential scan read 487,293 rows from table 'orders'. Filter applied: 
+   (status = 'pending'::text) Filter removed 12,707 rows, keeping only 487,293.
+   
+   Fix:
+   CREATE INDEX idx_orders_status ON orders(status);
+   -- Docs: https://www.postgresql.org/docs/current/indexes-types.html
 ```
 
-### Generate EXPLAIN Output
-
-Run your slow query with `EXPLAIN (ANALYZE, FORMAT JSON)`:
-
-```sql
--- In psql or your SQL client
-EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
-SELECT o.*, u.email
-FROM orders o
-JOIN users u ON o.user_id = u.id
-WHERE o.status = 'pending'
-ORDER BY o.created_at DESC
-LIMIT 100;
-```
-
-Save the output to a file (e.g., `explain.json`).
-
-### Analyze
-
+## Install
 ```bash
-querysense analyze explain.json
+git clone https://github.com/JosephAhn23/QuerySense.git
+cd QuerySense
+pip install -e .
 ```
 
 ## Usage
 
-### CLI Commands
-
+### 1. Get EXPLAIN output from PostgreSQL
 ```bash
-# Analyze an EXPLAIN file
-querysense analyze explain.json
-
-# Allow plain EXPLAIN (without ANALYZE data)
-querysense analyze explain.json --allow-plain
-
-# Output as JSON (for programmatic use)
-querysense analyze explain.json --json
-
-# Show version
-querysense --version
+psql -c "EXPLAIN (ANALYZE, FORMAT JSON) 
+  SELECT * FROM orders WHERE status = 'pending'" > plan.json
 ```
 
-### Programmatic Usage
+### 2. Analyze it
+```bash
+python -m querysense.cli.main analyze plan.json
+```
 
+### 3. Apply the suggested fix
+```sql
+CREATE INDEX idx_orders_status ON orders(status);
+```
+
+## Output Formats
+
+**Human-readable (default):**
+```bash
+querysense analyze plan.json
+```
+
+**JSON (for scripting):**
+```bash
+querysense analyze plan.json --json
+```
+
+## What It Detects
+
+Currently detects:
+- Sequential scans on large tables (>10k rows)
+- Row estimation errors (planner vs actual)
+
+Coming soon based on user feedback:
+- Nested loops without indexes
+- Sorts on large datasets
+- Hash joins with memory spills
+
+## Examples
+
+**Well-optimized query:**
+```bash
+$ querysense analyze good_plan.json
++--------------------------------- QuerySense ---------------------------------+
+| No performance issues found!                                                 |
++------------------------------------------------------------------------------+
+```
+
+**Multiple issues:**
+```bash
+$ querysense analyze bad_plan.json
+
+Found 2 issue(s):
+
+[WARNING] Sequential scan on users (1,047,293 rows)
+   Fix: CREATE INDEX idx_users_email ON users(email);
+
+[INFO] Row estimation error on orders
+   Planner estimated 100 rows, actually scanned 487,293 (4,873x off)
+   Fix: ANALYZE orders;
+```
+
+## Testing
+```bash
+pytest  # 66 tests pass
+```
+
+## Status
+
+**Early alpha.** Works on real EXPLAIN plans, but only catches sequential scan issues right now.
+
+This is intentionally minimal - adding rules based on actual user needs, not speculation.
+
+## Contributing
+
+Have a slow query? Share the EXPLAIN plan:
+```bash
+psql -c "EXPLAIN (ANALYZE, FORMAT JSON) YOUR_SLOW_QUERY" > slow.json
+```
+
+Open an issue with `slow.json` attached. If it's a common pattern, we'll add a rule.
+
+### Adding a Rule
+
+Rules are ~20 lines. Here's the template:
 ```python
-from querysense.parser import parse_explain
+# querysense/analyzer/rules/your_rule.py
+from querysense.analyzer.rules.base import Rule
+from querysense.analyzer.models import Finding, Severity
 
-# Parse from file
-output = parse_explain("explain.json")
-
-# Parse from string
-output = parse_explain('{"Plan": {...}}')
-
-# Iterate through all nodes
-for node in output.all_nodes:
-    if node.node_type == "Seq Scan" and (node.actual_rows or 0) > 10000:
-        print(f"Large sequential scan on {node.relation_name}")
-
-# Find slow nodes
-slow_nodes = output.find_slow_nodes(threshold_ms=100)
+class YourRule(Rule):
+    """Detects [specific problem]."""
+    
+    def analyze(self, node, context):
+        if node.node_type == "Something Bad":
+            yield Finding(
+                rule_id="YOUR_RULE",
+                severity=Severity.WARNING,
+                title=f"Problem with {node.relation_name}",
+                description="Why this is slow...",
+                suggestion="CREATE INDEX ...",
+                context=context
+            )
 ```
 
-## Development
+See `querysense/analyzer/rules/` for examples.
 
-### Running Tests
+## Why This Exists
 
-```bash
-# Run all tests
-pytest
+Reading EXPLAIN plans is hard. This tool:
+- Parses the JSON for you
+- Highlights actual problems (not noise)
+- Suggests copy-paste fixes
+- Links to PostgreSQL docs
 
-# Run with coverage
-pytest --cov=querysense
+No API keys, no telemetry, no LLM - just deterministic rules that work offline.
 
-# Run specific test file
-pytest tests/test_parser.py -v
-```
+## Non-Goals
 
-### Type Checking
-
-```bash
-# Run mypy
-mypy src/querysense
-```
-
-### Linting
-
-```bash
-# Run ruff
-ruff check src tests
-
-# Auto-fix issues
-ruff check --fix src tests
-```
-
-## Architecture
-
-```
-querysense/
-├── parser/          # EXPLAIN JSON parsing and validation
-│   ├── models.py    # Pydantic models for plan nodes
-│   └── parser.py    # Parsing logic and error handling
-├── analyzer/        # Heuristic rules engine
-│   └── rules/       # Individual detection rules
-├── explainer/       # LLM integration for explanations
-├── cli/             # Command-line interface
-└── output/          # Result formatting
-```
-
-### Design Principles
-
-1. **Deterministic first:** Core analysis uses heuristic rules that are testable and reliable
-2. **LLM for UX:** AI explanations enhance but don't replace deterministic findings
-3. **Fail loudly:** Clear error messages over silent failures
-4. **Type safety:** Full type coverage with Pydantic and mypy strict mode
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | API key for Claude explanations | Required for AI explanations |
-| `QUERYSENSE_MODEL` | Claude model to use | `claude-3-haiku-20240307` |
-| `QUERYSENSE_TIMEOUT` | API request timeout (seconds) | `30` |
-| `DATABASE_URL` | PostgreSQL connection for schema introspection | Optional |
-
-## Roadmap
-
-- [x] EXPLAIN JSON parser with full type coverage
-- [ ] Core analyzer rules (sequential scan, missing index, etc.)
-- [ ] LLM explanation integration
-- [ ] CLI with rich output
-- [ ] Web API
-- [ ] Query plan visualization
-- [ ] Schema introspection
+- **Not a query optimizer** - Doesn't rewrite your SQL
+- **Not a monitoring tool** - Doesn't connect to your database
+- **Not AI-powered** - Deterministic rules you can understand and trust
 
 ## License
 
 MIT
 
-## Contributing
+## Links
 
-Contributions welcome! Please read the contributing guidelines and ensure tests pass before submitting PRs.
+- **Issues**: https://github.com/JosephAhn23/QuerySense/issues
+- **PostgreSQL EXPLAIN docs**: https://www.postgresql.org/docs/current/using-explain.html
+- **Index types**: https://www.postgresql.org/docs/current/indexes-types.html
 
+---
+
+**Built by developers tired of manually reading EXPLAIN plans.**
+
+*v0.1.0 - Ships with 2 rules, 66 tests, zero dependencies.*
