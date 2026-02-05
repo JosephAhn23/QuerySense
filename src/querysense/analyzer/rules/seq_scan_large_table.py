@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, model_validator
 
+from querysense.analyzer.index_advisor import CostEstimator, IndexRecommender
 from querysense.analyzer.models import Finding, NodeContext, RulePhase, Severity
 from querysense.analyzer.registry import register_rule
 from querysense.analyzer.rules.base import Rule, RuleConfig
@@ -154,19 +155,32 @@ class SeqScanLargeTable(Rule):
             # Build NodeContext with full information
             context = NodeContext.from_node(node, path, parent)
             
+            # Calculate selectivity and improvement estimate
+            rows_removed = node.rows_removed_by_filter or 0
+            total_before = actual_rows + rows_removed
+            selectivity = actual_rows / total_before if total_before > 0 else 1.0
+            
+            estimated_improvement = 1.0
+            if selectivity < 0.5 and total_before > 0:
+                estimated_improvement = CostEstimator.estimate_improvement(
+                    total_before, actual_rows, node.total_cost
+                )
+            
             # Build the finding with full context
             finding = Finding(
                 rule_id=self.rule_id,
                 severity=severity,
                 context=context,
-                title=f"Sequential scan on {table_name} ({actual_rows:,} rows)",
+                title=f"Seq Scan on {table_name} (cost={node.total_cost:,.0f}, {actual_rows:,} rows)",
                 description=self._build_description(node, actual_rows),
                 suggestion=self._build_suggestion(node),
                 metrics={
                     "rows_scanned": actual_rows,
+                    "rows_removed_by_filter": rows_removed,
                     "total_cost": node.total_cost,
                     "startup_cost": node.startup_cost,
-                    "rows_removed_by_filter": node.rows_removed_by_filter or 0,
+                    "selectivity": round(selectivity, 4),
+                    "estimated_improvement": round(estimated_improvement, 2),
                 },
             )
             findings.append(finding)
@@ -174,66 +188,70 @@ class SeqScanLargeTable(Rule):
         return findings
     
     def _build_description(self, node: "PlanNode", actual_rows: int) -> str:
-        """Build a detailed description of the issue."""
+        """Build a detailed description with cost analysis."""
+        table = node.relation_name or "unknown"
         parts = [
-            f"Sequential scan read {actual_rows:,} rows from table "
-            f"'{node.relation_name or 'unknown'}'."
+            f"Sequential scan on '{table}' "
+            f"(cost={node.total_cost:,.2f}, {actual_rows:,} rows)"
         ]
         
         if node.filter:
-            parts.append(f"Filter applied: {node.filter}")
+            parts.append(f"\nFilter: {node.filter}")
             
         if node.rows_removed_by_filter:
+            total_before = actual_rows + node.rows_removed_by_filter
+            selectivity = actual_rows / total_before if total_before > 0 else 1.0
+            
             parts.append(
-                f"Filter removed {node.rows_removed_by_filter:,} rows, "
-                f"keeping only {actual_rows:,}."
+                f"\nSelectivity: {selectivity:.2%} "
+                f"({actual_rows:,} matching / {total_before:,} scanned)"
             )
-            if node.rows_removed_by_filter > actual_rows * 10:
+            
+            if selectivity < 0.1:
+                # Very selective - index would help a lot
+                # Estimate improvement
+                estimated_improvement = CostEstimator.estimate_improvement(
+                    total_before, actual_rows, node.total_cost
+                )
                 parts.append(
-                    "The filter is very selective - an index would help significantly."
+                    f"\nEstimated index improvement: {estimated_improvement:.1f}x faster"
+                )
+            elif selectivity < 0.5:
+                parts.append("\nModerate selectivity - index may help.")
+            else:
+                parts.append(
+                    "\nLow selectivity - index may not help (too many rows match)."
                 )
         
-        return " ".join(parts)
+        return "".join(parts)
     
     def _build_suggestion(self, node: "PlanNode") -> str | None:
-        """Build an actionable suggestion with SQL and docs link."""
+        """Build an actionable suggestion with cost analysis."""
         if not node.relation_name:
             return None
         
+        # Use the smart IndexRecommender for detailed analysis
+        recommender = IndexRecommender()
+        recommendations = recommender.analyze_node(node)
+        
+        if recommendations:
+            # Use the best recommendation
+            rec = recommendations[0]
+            return rec.format_full()
+        
+        # Fallback if no filter to analyze
         table = node.relation_name
         docs_url = "https://www.postgresql.org/docs/current/indexes-types.html"
         
         if node.filter:
-            # Try to extract column name from filter
-            column = self._extract_column_from_filter(node.filter)
-            
-            if column:
-                # Deterministic: provide actual CREATE INDEX statement
-                index_name = f"idx_{table}_{column}"
-                return (
-                    f"CREATE INDEX {index_name} ON {table}({column});\n"
-                    f"-- Docs: {docs_url}"
-                )
-            else:
-                return (
-                    f"Add an index on {table} for the filtered column.\n"
-                    f"Filter: {node.filter}\n"
-                    f"-- Docs: {docs_url}"
-                )
+            return (
+                f"-- Add an index on {table} for the filtered column(s)\n"
+                f"-- Filter: {node.filter}\n"
+                f"-- Docs: {docs_url}"
+            )
         
         return (
-            f"Consider whether all rows from {table} are needed.\n"
-            f"If filtering is possible, add a WHERE clause and corresponding index.\n"
+            f"-- Consider whether all rows from {table} are needed.\n"
+            f"-- If filtering is possible, add a WHERE clause and corresponding index.\n"
             f"-- Docs: {docs_url}"
         )
-    
-    def _extract_column_from_filter(self, filter_str: str) -> str | None:
-        """Extract column name from a simple filter string."""
-        import re
-        
-        # Match patterns like: (column = value), (column > value)
-        match = re.search(r"\(?\s*(\w+)\s*[=<>!]", filter_str)
-        if match:
-            return match.group(1)
-        
-        return None

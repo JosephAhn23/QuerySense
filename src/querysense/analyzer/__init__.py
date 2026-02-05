@@ -14,6 +14,19 @@ from querysense.analyzer.fingerprint import (
     PlanDiff,
     PlanFingerprint,
 )
+from querysense.analyzer.index_advisor import (
+    CostEstimator,
+    IndexRecommendation,
+    IndexRecommender,
+    recommend_indexes,
+)
+from querysense.analyzer.sql_parser import (
+    ColumnInfo,
+    QueryInfo,
+    SQLQueryAnalyzer,
+    analyze_sql,
+    suggest_indexes_for_query,
+)
 from querysense.analyzer.models import (
     AnalysisResult,
     ExecutionMetadata,
@@ -39,8 +52,13 @@ from querysense.analyzer.safety import (
 
 # Import rules to register them
 from querysense.analyzer.rules import bad_row_estimate as _bad_estimate  # noqa: F401
+from querysense.analyzer.rules import correlated_subquery as _subquery  # noqa: F401
 from querysense.analyzer.rules import excessive_seq_scans as _excessive  # noqa: F401
+from querysense.analyzer.rules import missing_buffers as _buffers  # noqa: F401
+from querysense.analyzer.rules import nested_loop_large_table as _nested_loop  # noqa: F401
+from querysense.analyzer.rules import parallel_query_not_used as _parallel  # noqa: F401
 from querysense.analyzer.rules import seq_scan_large_table as _seq_scan  # noqa: F401
+from querysense.analyzer.rules import spilling_to_disk as _spilling  # noqa: F401
 
 __all__ = [
     # Main orchestrator
@@ -82,4 +100,15 @@ __all__ = [
     "FindingDelta",
     "compare_analyses",
     "compare_explains",
+    # Index Advisor
+    "IndexRecommender",
+    "IndexRecommendation",
+    "CostEstimator",
+    "recommend_indexes",
+    # SQL Parser
+    "SQLQueryAnalyzer",
+    "QueryInfo",
+    "ColumnInfo",
+    "analyze_sql",
+    "suggest_indexes_for_query",
 ]

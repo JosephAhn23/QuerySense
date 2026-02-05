@@ -3,6 +3,11 @@ Analyzer - simple rule engine for EXPLAIN plans.
 
 Runs rules against an EXPLAIN output and returns findings.
 Designed to work without any external dependencies (no LLM required).
+
+Enhanced with optional SQL parsing for deeper analysis:
+- Level 1: EXPLAIN JSON only (default)
+- Level 2: EXPLAIN JSON + SQL query (enables specific column recommendations)
+- Level 3: EXPLAIN JSON + SQL + DB connection (future)
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from querysense.analyzer.models import (
 )
 from querysense.analyzer.registry import get_registry
 from querysense.analyzer.rules.base import Rule
+from querysense.analyzer.sql_parser import QueryInfo, SQLQueryAnalyzer
 
 if TYPE_CHECKING:
     from querysense.parser.models import ExplainOutput
@@ -84,17 +90,44 @@ class Analyzer:
         self.parallel = parallel
         self.max_workers = max_workers
     
-    def analyze(self, explain: "ExplainOutput") -> AnalysisResult:
+    def analyze(
+        self,
+        explain: "ExplainOutput",
+        sql: str | None = None,
+    ) -> AnalysisResult:
         """
         Analyze an EXPLAIN output for performance issues.
         
         Args:
             explain: Parsed EXPLAIN output
+            sql: Optional SQL query for enhanced analysis.
+                 When provided, enables:
+                 - Specific column recommendations for indexes
+                 - Composite index suggestions
+                 - Better join column detection
             
         Returns:
             AnalysisResult with findings and metadata
         """
         start_time = time.perf_counter()
+        
+        # Parse SQL if provided for enhanced analysis
+        query_info: QueryInfo | None = None
+        if sql:
+            try:
+                analyzer = SQLQueryAnalyzer()
+                query_info = analyzer.analyze(sql)
+                logger.debug(
+                    "SQL parsed: %d tables, %d filter cols, %d join cols",
+                    len(query_info.tables),
+                    len(query_info.filter_columns),
+                    len(query_info.join_columns),
+                )
+            except Exception as e:
+                logger.warning("Failed to parse SQL query: %s", e)
+        
+        # Store query_info for rules to access (via thread-local or context)
+        self._current_query_info = query_info
         
         # Split rules by phase
         per_node_rules = [r for r in self.rules if r.phase == RulePhase.PER_NODE]
@@ -119,6 +152,10 @@ class Analyzer:
         all_findings = phase1_findings + phase2_findings
         all_errors = phase1_errors + phase2_errors
         
+        # Enhance findings with SQL-based recommendations if available
+        if query_info:
+            all_findings = self._enhance_findings_with_sql(all_findings, query_info)
+        
         # Build result
         duration_ms = (time.perf_counter() - start_time) * 1000
         
@@ -131,6 +168,100 @@ class Analyzer:
                 rules_failed=len(all_errors),
             ),
         )
+    
+    def _enhance_findings_with_sql(
+        self,
+        findings: list[Finding],
+        query_info: QueryInfo,
+    ) -> list[Finding]:
+        """
+        Enhance findings with SQL-based index recommendations.
+        
+        When we have the original SQL, we can provide much more specific
+        recommendations for indexes, including composite indexes that
+        cover filters, joins, and sorts together.
+        """
+        from querysense.analyzer.index_advisor import IndexRecommendation, IndexType
+        
+        enhanced: list[Finding] = []
+        
+        for finding in findings:
+            # Only enhance SEQ_SCAN findings
+            if finding.rule_id != "SEQ_SCAN_LARGE_TABLE":
+                enhanced.append(finding)
+                continue
+            
+            # Get table from finding
+            table = finding.context.relation_name
+            if not table:
+                enhanced.append(finding)
+                continue
+            
+            # Get recommended columns from SQL analysis
+            columns = query_info.suggest_composite_index(table)
+            
+            if not columns:
+                enhanced.append(finding)
+                continue
+            
+            # Build enhanced suggestion
+            rec = IndexRecommendation(
+                table=table,
+                columns=columns,
+                index_type=IndexType.BTREE,
+                estimated_improvement=finding.metrics.get("estimated_improvement", 1.0),
+                reasoning=self._build_sql_reasoning(query_info, table, columns),
+            )
+            
+            # Create new finding with enhanced suggestion
+            enhanced_finding = finding.model_copy(update={
+                "suggestion": rec.format_full(),
+            })
+            enhanced.append(enhanced_finding)
+        
+        return enhanced
+    
+    def _build_sql_reasoning(
+        self,
+        query_info: QueryInfo,
+        table: str,
+        columns: list[str],
+    ) -> str:
+        """Build reasoning based on SQL analysis."""
+        parts: list[str] = ["Based on SQL query analysis:"]
+        
+        filter_cols = [
+            c for c in query_info.filter_columns
+            if c.table == table or c.table is None
+        ]
+        join_cols = [
+            c for c in query_info.join_columns
+            if c.table == table or c.table is None
+        ]
+        order_cols = [
+            c for c in query_info.order_by_columns
+            if c.table == table or c.table is None
+        ]
+        
+        if filter_cols:
+            equality = [c.column for c in filter_cols if c.is_equality]
+            ranges = [c.column for c in filter_cols if c.is_range]
+            if equality:
+                parts.append(f"- Equality filters on: {', '.join(equality)}")
+            if ranges:
+                parts.append(f"- Range filters on: {', '.join(ranges)}")
+        
+        if join_cols:
+            parts.append(f"- Join columns: {', '.join(c.column for c in join_cols)}")
+        
+        if order_cols:
+            parts.append(f"- Sort columns: {', '.join(c.column for c in order_cols)}")
+        
+        parts.append("")
+        parts.append(f"Recommended column order: {', '.join(columns)}")
+        parts.append("(Equality columns first, then range, then sort)")
+        
+        return "\n".join(parts)
     
     def _run_rules_sequential(
         self,
