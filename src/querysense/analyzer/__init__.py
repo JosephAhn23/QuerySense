@@ -38,6 +38,7 @@ from querysense.analyzer.safety import (
 )
 
 # Import rules to register them
+from querysense.analyzer.rules import bad_row_estimate as _bad_estimate  # noqa: F401
 from querysense.analyzer.rules import excessive_seq_scans as _excessive  # noqa: F401
 from querysense.analyzer.rules import seq_scan_large_table as _seq_scan  # noqa: F401
 
