@@ -14,6 +14,10 @@ $ querysense analyze slow_query.json
 [WARNING] Sequential scan on orders (250,000 rows)
    Estimated improvement: 57x faster
    Fix: CREATE INDEX idx_orders_status ON orders(status);
+
+# Get ONLY the SQL fixes (copy-paste ready)
+$ querysense fix slow_query.json > fixes.sql
+$ psql < fixes.sql
 ```
 
 ## Install
@@ -68,7 +72,7 @@ mysql -e "CREATE INDEX idx_orders_status ON orders(status);"
 
 ## What It Catches
 
-### PostgreSQL Rules
+### PostgreSQL Rules (11)
 
 | Issue | Severity | Fix |
 |-------|----------|-----|
@@ -80,6 +84,9 @@ mysql -e "CREATE INDEX idx_orders_status ON orders(status);"
 | Parallel query not used | INFO | Check `max_parallel_workers` |
 | Correlated subquery | WARNING | Rewrite as JOIN |
 | Missing BUFFERS in EXPLAIN | INFO | Use `EXPLAIN (ANALYZE, BUFFERS)` |
+| **Foreign key without index** | WARNING/CRITICAL | `CREATE INDEX` on FK column |
+| **Stale statistics** | WARNING/CRITICAL | `ANALYZE table` |
+| **Table bloat** | INFO/CRITICAL | `VACUUM ANALYZE` |
 
 ### MySQL Rules
 
@@ -121,11 +128,11 @@ querysense analyze plan.json --json
 
 | Database | Throughput | Notes |
 |----------|-----------|-------|
-| PostgreSQL | **652 plans/sec** | 250k plans, 8 rules |
+| PostgreSQL | **652 plans/sec** | 250k plans, 11 rules |
 | MySQL | **112,000+ plans/sec** | 50k plans, 6 rules |
 
 Stress-tested on 250,000 PostgreSQL query plans:
-- **584,957 issues** detected across 8 rule types
+- **584,957 issues** detected across 11 rule types
 - **1.7GB peak memory** - production-viable footprint
 - **0.00% error rate** - deterministic rule engine
 
@@ -153,7 +160,7 @@ QuerySense handles fleet-scale databases.
 
 - **Deterministic** - No AI, no API keys, works offline
 - **Actionable** - Every issue includes copy-paste SQL to fix it
-- **Focused** - 14 rules (8 PostgreSQL + 6 MySQL) that catch real problems
+- **Focused** - 17 rules (11 PostgreSQL + 6 MySQL) that catch real problems
 - **Honest** - Only flags issues we're confident about. No false positives.
 
 ## Contributing
@@ -168,4 +175,4 @@ MIT
 
 ---
 
-*v0.3.0 - PostgreSQL + MySQL support, 14 rules, 112k+ plans/sec*
+*v0.3.0 - PostgreSQL + MySQL support, 17 rules, 112k+ plans/sec*

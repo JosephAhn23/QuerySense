@@ -253,5 +253,208 @@ def analyze(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def fix(
+    explain_file: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to EXPLAIN output file (JSON format)",
+            exists=True,
+            readable=True,
+            resolve_path=True,
+        ),
+    ],
+    database: Annotated[
+        DatabaseType,
+        typer.Option(
+            "--database",
+            "-d",
+            help="Database type (auto-detected if not specified)",
+        ),
+    ] = DatabaseType.auto,
+    require_analyze: Annotated[
+        bool,
+        typer.Option(
+            "--require-analyze/--allow-plain",
+            help="Require EXPLAIN ANALYZE output (PostgreSQL only)",
+        ),
+    ] = True,
+) -> None:
+    """
+    Output copy-paste SQL fixes for performance issues.
+    
+    Unlike 'analyze', this command outputs ONLY the SQL statements
+    needed to fix detected issues - ready to copy-paste into your
+    database client.
+    
+    Examples:
+    
+        # Get fixes and apply directly
+        $ querysense fix slow_query.json | psql
+        
+        # Review fixes first
+        $ querysense fix slow_query.json > fixes.sql
+        $ cat fixes.sql
+        $ psql < fixes.sql
+    """
+    try:
+        # Read the file
+        raw_content = explain_file.read_text()
+        data = json.loads(raw_content)
+        
+        # Auto-detect database type if needed
+        db_type = database
+        if db_type == DatabaseType.auto:
+            db_type = detect_database_type(data)
+        
+        # Route to appropriate analyzer
+        if db_type == DatabaseType.mysql:
+            from querysense.analyzers.mysql import MySQLAnalyzer
+            
+            mysql_analyzer = MySQLAnalyzer()
+            parsed = mysql_analyzer.parse_plan(data)
+            findings = mysql_analyzer.detect_issues(parsed)
+            
+        else:
+            # PostgreSQL analyzer (default)
+            output = parse_explain(explain_file)
+            
+            if require_analyze:
+                validate_has_analyze(output)
+            
+            analyzer = Analyzer()
+            result = analyzer.analyze(output)
+            findings = result.findings
+        
+        if not findings:
+            console.print("-- No performance issues found. Nothing to fix.")
+            return
+        
+        # Output SQL header
+        console.print(f"-- QuerySense Fixes ({db_type.value})")
+        console.print(f"-- {len(findings)} issue(s) detected\n")
+        
+        seen_fixes: set[str] = set()  # Deduplicate identical fixes
+        
+        for finding in findings:
+            if not finding.suggestion:
+                continue
+            
+            # Extract just the SQL statements (lines not starting with --)
+            sql_lines: list[str] = []
+            for line in finding.suggestion.split("\n"):
+                stripped = line.strip()
+                # Skip comments and empty lines for the dedup check
+                if stripped and not stripped.startswith("--"):
+                    sql_lines.append(stripped)
+            
+            if not sql_lines:
+                continue
+            
+            # Create unique key for dedup
+            fix_key = "\n".join(sql_lines)
+            if fix_key in seen_fixes:
+                continue
+            seen_fixes.add(fix_key)
+            
+            # Output with context comment
+            console.print(f"-- [{finding.severity.value.upper()}] {finding.title}")
+            
+            # Output the full suggestion with proper formatting
+            for line in finding.suggestion.split("\n"):
+                if line.strip():
+                    console.print(line)
+            
+            console.print()
+        
+        # Footer
+        console.print("-- End of fixes")
+        console.print(f"-- Run with: psql < fixes.sql" if db_type == DatabaseType.postgres else "-- Run in MySQL client")
+        
+    except ParseError as e:
+        error_console.print(f"[red]Error:[/red] {e.message}")
+        if e.detail:
+            error_console.print(f"\n[dim]{e.detail}[/dim]")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def rules(
+    database: Annotated[
+        DatabaseType,
+        typer.Option(
+            "--database",
+            "-d",
+            help="Show rules for specific database",
+        ),
+    ] = DatabaseType.postgres,
+) -> None:
+    """
+    List all available detection rules.
+    
+    Shows rule IDs, descriptions, and severity levels.
+    """
+    from querysense.analyzer.registry import get_registry
+    
+    if database == DatabaseType.mysql or database == DatabaseType.auto:
+        # Show MySQL rules
+        console.print("[bold]MySQL Rules:[/bold]\n")
+        mysql_rules = [
+            ("FULL_TABLE_SCAN", "CRITICAL", "Detects type='ALL' on large tables"),
+            ("MISSING_INDEX", "WARNING", "key=NULL when possible_keys exists"),
+            ("USING_FILESORT", "WARNING", "Query requires filesort operation"),
+            ("USING_TEMPORARY", "WARNING", "Query uses temporary tables"),
+            ("BAD_JOIN_TYPE", "WARNING", "Suboptimal join access type"),
+            ("NO_INDEX_USED", "INFO", "Query not using any index"),
+        ]
+        
+        table = Table()
+        table.add_column("Rule ID", style="cyan")
+        table.add_column("Severity")
+        table.add_column("Description")
+        
+        for rule_id, severity, desc in mysql_rules:
+            if severity == "CRITICAL":
+                sev_style = "red bold"
+            elif severity == "WARNING":
+                sev_style = "yellow"
+            else:
+                sev_style = "blue"
+            
+            table.add_row(rule_id, f"[{sev_style}]{severity}[/{sev_style}]", desc)
+        
+        console.print(table)
+        console.print()
+    
+    if database == DatabaseType.postgres or database == DatabaseType.auto:
+        # Show PostgreSQL rules
+        console.print("[bold]PostgreSQL Rules:[/bold]\n")
+        
+        registry = get_registry()
+        rules = registry.all()
+        
+        table = Table()
+        table.add_column("Rule ID", style="cyan")
+        table.add_column("Severity")
+        table.add_column("Description")
+        
+        for rule_cls in sorted(rules, key=lambda r: r.rule_id):
+            severity = rule_cls.severity.value.upper()
+            if severity == "CRITICAL":
+                sev_style = "red bold"
+            elif severity == "WARNING":
+                sev_style = "yellow"
+            else:
+                sev_style = "blue"
+            
+            table.add_row(
+                rule_cls.rule_id,
+                f"[{sev_style}]{severity}[/{sev_style}]",
+                rule_cls.description,
+            )
+        
+        console.print(table)
+
+
 if __name__ == "__main__":
     app()
