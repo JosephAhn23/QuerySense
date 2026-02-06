@@ -1,6 +1,6 @@
 # QuerySense
 
-Analyze PostgreSQL and MySQL EXPLAIN plans and get actionable performance fixes.
+Analyze PostgreSQL EXPLAIN plans and get actionable performance fixes.
 
 ![QuerySense: 2.3s → 0.04s with one index](query.png)
 
@@ -40,8 +40,6 @@ pip install querysense[ai]  # Adds Claude-based explanations
 
 ## Usage
 
-### PostgreSQL
-
 ```bash
 # 1. Export your slow query's plan
 psql -c "EXPLAIN (ANALYZE, FORMAT JSON) 
@@ -50,29 +48,14 @@ psql -c "EXPLAIN (ANALYZE, FORMAT JSON)
 # 2. Analyze it
 querysense analyze plan.json
 
-# 3. Apply the suggested fixes
-psql -c "CREATE INDEX idx_orders_status ON orders(status);"
-```
+# 3. Get copy-paste SQL fixes
+querysense fix plan.json > fixes.sql
 
-### MySQL
-
-```bash
-# 1. Export your slow query's plan  
-mysql -e "EXPLAIN FORMAT=JSON SELECT * FROM orders WHERE status = 'pending'" > plan.json
-
-# 2. Analyze it (auto-detects MySQL format)
-querysense analyze plan.json
-
-# Or explicitly specify MySQL
-querysense analyze --database mysql plan.json
-
-# 3. Apply the suggested fixes
-mysql -e "CREATE INDEX idx_orders_status ON orders(status);"
+# 4. Apply the fixes
+psql < fixes.sql
 ```
 
 ## What It Catches
-
-### PostgreSQL Rules (11)
 
 | Issue | Severity | Fix |
 |-------|----------|-----|
@@ -84,20 +67,11 @@ mysql -e "CREATE INDEX idx_orders_status ON orders(status);"
 | Parallel query not used | INFO | Check `max_parallel_workers` |
 | Correlated subquery | WARNING | Rewrite as JOIN |
 | Missing BUFFERS in EXPLAIN | INFO | Use `EXPLAIN (ANALYZE, BUFFERS)` |
-| **Foreign key without index** | WARNING/CRITICAL | `CREATE INDEX` on FK column |
-| **Stale statistics** | WARNING/CRITICAL | `ANALYZE table` |
-| **Table bloat** | INFO/CRITICAL | `VACUUM ANALYZE` |
+| Foreign key without index | WARNING/CRITICAL | `CREATE INDEX` on FK column |
+| Stale statistics | WARNING/CRITICAL | `ANALYZE table` |
+| Table bloat | INFO/CRITICAL | `VACUUM ANALYZE` |
 
-### MySQL Rules
-
-| Issue | Severity | Fix |
-|-------|----------|-----|
-| Full table scan (type=ALL) | CRITICAL | `CREATE INDEX` |
-| Index available but not used | WARNING | `ANALYZE TABLE` or query hints |
-| Using filesort | WARNING | Index on ORDER BY columns |
-| Using temporary table | WARNING | Index on GROUP BY columns |
-| Bad join access type | CRITICAL | Index on JOIN column |
-| No index available | WARNING | `CREATE INDEX` |
+**11 rules** that catch real PostgreSQL performance problems.
 
 ## Verify It Helped
 
@@ -113,7 +87,7 @@ psql -c "CREATE INDEX idx_orders_status ON orders(status);"
 psql -c "EXPLAIN (ANALYZE, FORMAT JSON) 
   SELECT * FROM orders WHERE status = 'pending'" > after.json
 querysense analyze after.json
-✓ No performance issues found!
+# No performance issues found!
 
 # Execution time: 2.3s → 0.02s (100x faster)
 ```
@@ -124,19 +98,12 @@ querysense analyze after.json
 querysense analyze plan.json --json
 ```
 
-## Performance at Scale
+## Performance
 
-| Database | Throughput | Notes |
-|----------|-----------|-------|
-| PostgreSQL | **652 plans/sec** | 250k plans, 11 rules |
-| MySQL | **112,000+ plans/sec** | 50k plans, 6 rules |
-
-Stress-tested on 250,000 PostgreSQL query plans:
-- **584,957 issues** detected across 11 rule types
+Stress-tested on 250,000 query plans:
+- **652 plans/second** analysis throughput
 - **1.7GB peak memory** - production-viable footprint
 - **0.00% error rate** - deterministic rule engine
-
-QuerySense handles fleet-scale databases.
 
 ## Why QuerySense?
 
@@ -144,24 +111,16 @@ QuerySense handles fleet-scale databases.
 |---------|-----------|-----------|-----------|------|
 | **Price** | Free | $29/mo | $499/mo | Free |
 | **CLI tool** | Yes | No | No | No |
-| **Auto-detect issues** | Yes | Partial | Yes | No |
 | **Copy-paste SQL fixes** | Yes | Partial | Yes | No |
 | **Works offline** | Yes | No | No | Yes |
-| **MySQL support** | Yes | No | No | No |
 | **No account required** | Yes | No | No | Yes |
-
-**vs pgMustard:** Free, CLI-first, gives you copy-paste SQL fixes
-
-**vs pganalyze:** Focused on one thing (EXPLAIN analysis) and does it well
-
-**vs PEV2:** Doesn't just visualize - detects issues and suggests fixes automatically
 
 ## Philosophy
 
 - **Deterministic** - No AI, no API keys, works offline
 - **Actionable** - Every issue includes copy-paste SQL to fix it
-- **Focused** - 17 rules (11 PostgreSQL + 6 MySQL) that catch real problems
-- **Honest** - Only flags issues we're confident about. No false positives.
+- **Focused** - 11 rules that catch real problems
+- **Honest** - Only flags issues we're confident about
 
 ## Contributing
 
@@ -175,4 +134,4 @@ MIT
 
 ---
 
-*v0.3.0 - PostgreSQL + MySQL support, 17 rules, 112k+ plans/sec*
+*v0.3.0 - 11 PostgreSQL rules, 652 plans/sec*

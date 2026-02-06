@@ -1,6 +1,6 @@
 # QuerySense vs Alternatives
 
-Honest comparison of database EXPLAIN analyzers. We believe in transparency.
+Honest comparison of PostgreSQL EXPLAIN analyzers. We believe in transparency.
 
 ## Feature Comparison
 
@@ -10,10 +10,9 @@ Honest comparison of database EXPLAIN analyzers. We believe in transparency.
 | **CLI-first** | Yes | No | No | No |
 | **Works offline** | Yes | No | No | Yes |
 | **PostgreSQL** | Yes | Yes | Yes | Yes |
-| **MySQL support** | Yes | No | Limited | No |
-| **Open source** | Yes (GPL-3) | No | No | Yes |
+| **Open source** | Yes (MIT) | No | No | Yes |
 | **Self-hosted** | Yes | No | $$$$ | Yes |
-| **Rule count** | 11+ | ~20 | 50+ | N/A (visualization) |
+| **Rule count** | 11 | ~20 | 50+ | N/A (visualization) |
 | **AI explanations** | Optional | Built-in | Built-in | No |
 | **CI/CD integration** | Planned | No | Yes | No |
 | **Continuous monitoring** | Planned | No | Yes | No |
@@ -25,7 +24,6 @@ Honest comparison of database EXPLAIN analyzers. We believe in transparency.
 - Want a **free, open-source** solution
 - Need to work **offline** (no data leaves your machine)
 - Want **CLI-first** workflow for scripts and automation
-- Need **MySQL + PostgreSQL** support in one tool
 - Prefer **copy-paste SQL fixes** over dashboards
 - Value **speed** (650+ plans/second)
 - Have security requirements (no cloud dependencies)
@@ -130,7 +128,6 @@ psql < fixes.sql
 | Pretty visualizations | **PEV2** |
 | AI explanations | **pgMustard** ($19/mo) |
 | Production monitoring | **pganalyze** ($99+/mo) |
-| MySQL support | **QuerySense** |
 
 ---
 

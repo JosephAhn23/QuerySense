@@ -1,14 +1,14 @@
 [project]
 name = "querysense"
 version = "0.3.0"
-description = "Database query performance analyzer for PostgreSQL and MySQL. Detects slow queries, suggests indexes, works offline."
+description = "PostgreSQL query performance analyzer. Detects slow queries, suggests indexes, works offline."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Joseph Ahn" }]
 keywords = [
-    "postgresql", "mysql", "query-optimization", "database", "performance", 
-    "explain", "index", "sql", "dba", "devops", "monitoring"
+    "postgresql", "query-optimization", "database", "performance", 
+    "explain", "index", "sql", "dba", "devops"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
