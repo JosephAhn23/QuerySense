@@ -5,9 +5,6 @@ Analyze PostgreSQL EXPLAIN plans and get actionable performance fixes.
 ```bash
 pip install querysense
 
-![QuerySense: 2.3s → 0.04s with one index](query.png)
-
-
 ```bash
 $ querysense analyze slow_query.json
 
@@ -19,6 +16,7 @@ $ querysense analyze slow_query.json
    Estimated improvement: 57x faster
    Fix: CREATE INDEX idx_orders_status ON orders(status);
 ```
+![QuerySense: 2.3s → 0.04s with one index](query.png)
 
 ## Install
 
