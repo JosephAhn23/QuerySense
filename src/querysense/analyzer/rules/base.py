@@ -93,6 +93,51 @@ class RuleConfig(BaseModel):
     enabled: bool = True
 
 
+class RuleContext:
+    """
+    Full context for rule execution.
+    
+    Provides access to:
+    - EXPLAIN output
+    - Prior findings from earlier phases
+    - SQL query info (if available)
+    - Database probe (if available)
+    - Available capabilities
+    
+    Rules that override analyze_with_context() receive this.
+    """
+    
+    def __init__(
+        self,
+        explain: "ExplainOutput",
+        prior_findings: list[Finding] | None = None,
+        query_info: Any | None = None,
+        db_probe: Any | None = None,
+        capabilities: set[str] | None = None,
+    ) -> None:
+        self.explain = explain
+        self.prior_findings = prior_findings or []
+        self.query_info = query_info
+        self.db_probe = db_probe
+        self.capabilities = capabilities or set()
+    
+    def has_capability(self, capability: str) -> bool:
+        """Check if a capability is available."""
+        return capability in self.capabilities
+    
+    def get_table_info(self, table: str) -> Any | None:
+        """
+        Get table information from DB probe (if available).
+        
+        Returns None if DB probe is not available.
+        """
+        if self.db_probe is None:
+            return None
+        # This would call the DB probe async method synchronously
+        # In practice, you'd want to pre-fetch this data
+        return None
+
+
 class Rule(ABC):
     """
     Abstract base class for analyzer rules.
@@ -110,11 +155,23 @@ class Rule(ABC):
         description: One-line description for documentation
         config_schema: Pydantic model for rule configuration (default: RuleConfig)
         phase: When to run this rule (PER_NODE or AGGREGATE)
+        requires: Capabilities this rule requires (e.g., ["sql_ast", "db_probe"])
+        provides: Capabilities this rule provides for downstream rules
     
     Phases:
         PER_NODE (default): Rule analyzes individual nodes. Runs first.
         AGGREGATE: Rule analyzes patterns across the entire query.
             Receives findings from PER_NODE phase. Runs second.
+    
+    Dependencies:
+        Rules can declare dependencies via `requires` and `provides`.
+        The analyzer topologically sorts rules and SKIPS those with unmet requirements.
+        
+        Built-in capabilities:
+        - "sql_ast": SQL AST is available (parsed with pglast or sqlparse)
+        - "sql_ast_high": SQL AST with HIGH confidence (pglast)
+        - "db_probe": Database probe is available for validation
+        - "prior_findings": Findings from PER_NODE phase (automatic for AGGREGATE)
     
     Example:
         class SeqScanConfig(RuleConfig):
@@ -124,12 +181,24 @@ class Rule(ABC):
             rule_id = "SEQ_SCAN_LARGE_TABLE"
             version = "1.0.0"
             severity = Severity.WARNING
-            phase = RulePhase.PER_NODE  # Default
+            phase = RulePhase.PER_NODE
             config_schema = SeqScanConfig
+            
+            # Only run if we have SQL AST for better recommendations
+            requires: tuple[str, ...] = ()  # No requirements (runs always)
+            provides: tuple[str, ...] = ("seq_scan_findings",)
             
             def analyze(self, explain, prior_findings=[]) -> list[Finding]:
                 if node.actual_rows > self.config.threshold_rows:
                     # ... detection logic ...
+        
+        class IndexValidator(Rule):
+            rule_id = "INDEX_VALIDATOR"
+            phase = RulePhase.AGGREGATE
+            
+            # Requires DB probe to validate index recommendations
+            requires: tuple[str, ...] = ("db_probe", "seq_scan_findings")
+            provides: tuple[str, ...] = ("validated_indexes",)
     """
     
     # Subclasses must define these
@@ -143,6 +212,10 @@ class Rule(ABC):
     
     # Execution phase (subclasses can override)
     phase: RulePhase = RulePhase.PER_NODE
+    
+    # Dependency DAG: what this rule requires and provides
+    requires: tuple[str, ...] = ()  # Capabilities this rule needs
+    provides: tuple[str, ...] = ()  # Capabilities this rule provides
     
     def __init__(self, config: RuleConfig | dict[str, Any] | None = None) -> None:
         """

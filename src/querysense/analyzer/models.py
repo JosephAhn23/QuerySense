@@ -6,6 +6,7 @@ in query plans. They're designed to be:
 - Immutable (frozen=True): Findings don't change after creation
 - Serializable: Easy JSON output for --json flag
 - Hashable: Can be used in sets for deduplication
+- Observable: Explicit status for PASS/SKIP/FAIL distinction
 """
 
 from __future__ import annotations
@@ -34,6 +35,61 @@ class RulePhase(IntEnum):
     """
     PER_NODE = 1
     AGGREGATE = 2
+
+
+class RuleRunStatus(str, Enum):
+    """
+    Status of a rule execution - distinguishes PASS vs SKIP vs FAIL.
+    
+    This is critical for observability: users must understand why
+    a rule didn't produce findings (no issues vs preconditions not met vs crash).
+    """
+    
+    PASS = "pass"      # Rule executed normally
+    SKIP = "skip"      # Preconditions not met (e.g., no SQL AST, no DBProbe)
+    FAIL = "fail"      # Rule crashed with an error
+
+
+class EvidenceLevel(str, Enum):
+    """
+    Evidence level for analysis - explicitly tracks data sources.
+    
+    Makes the design contract explicit:
+    - Level 1 (PLAN): EXPLAIN JSON only → findings are plan-evidenced
+    - Level 2 (PLAN_SQL): EXPLAIN JSON + SQL → findings include SQL-derived hypotheses
+    - Level 3 (PLAN_SQL_DB): EXPLAIN + SQL + DB facts → validated recommendations
+    """
+    
+    PLAN = "PLAN"
+    PLAN_SQL = "PLAN+SQL"
+    PLAN_SQL_DB = "PLAN+SQL+DB"
+
+
+class ImpactBand(str, Enum):
+    """
+    Impact band for recommendations - replaces specific multiplier claims.
+    
+    Never overclaim with "57x faster". Instead use impact bands with
+    explicit assumptions and verification steps.
+    """
+    
+    LOW = "LOW"          # Minor improvement expected (< 2x)
+    MEDIUM = "MEDIUM"    # Moderate improvement expected (2-10x)
+    HIGH = "HIGH"        # Significant improvement expected (> 10x)
+    UNKNOWN = "UNKNOWN"  # Cannot estimate without more data
+
+
+class SQLConfidence(str, Enum):
+    """
+    Confidence level in SQL parsing results.
+    
+    When AST parse fails, disable index advice or mark as heuristic.
+    """
+    
+    HIGH = "high"        # Parsed with pglast (real Postgres parser)
+    MEDIUM = "medium"    # Parsed with sqlparse (heuristic tokenizer)
+    LOW = "low"          # Parse failed, heuristic extraction only
+    NONE = "none"        # No SQL provided
 
 
 class Severity(str, Enum):
@@ -225,6 +281,22 @@ class Finding(BaseModel):
         description="Quantitative data about the issue",
     )
     
+    # Impact estimation - never overclaim
+    impact_band: ImpactBand = Field(
+        default=ImpactBand.UNKNOWN,
+        description="Expected improvement band (LOW/MEDIUM/HIGH/UNKNOWN)",
+    )
+    
+    assumptions: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Assumptions underlying the recommendation",
+    )
+    
+    verification_steps: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Steps to verify the recommendation's effectiveness",
+    )
+    
     # LLM explanation (populated by explainer if enabled)
     explanation: str | None = Field(
         default=None,
@@ -315,6 +387,25 @@ class Finding(BaseModel):
         ))
 
 
+class RuleRun(BaseModel):
+    """
+    Record of a single rule execution.
+    
+    Enables explicit observability: users can distinguish PASS vs SKIP vs FAIL
+    and understand exactly what happened during analysis.
+    """
+    
+    model_config = ConfigDict(frozen=True)
+    
+    rule_id: str = Field(..., description="Unique rule identifier")
+    version: str = Field(..., description="Rule version for cache invalidation")
+    status: RuleRunStatus = Field(..., description="Execution status")
+    runtime_ms: float = Field(default=0.0, description="Execution time in milliseconds")
+    findings_count: int = Field(default=0, description="Number of findings generated")
+    error_summary: str | None = Field(default=None, description="Error message if FAIL")
+    skip_reason: str | None = Field(default=None, description="Reason if SKIP")
+
+
 class ExecutionMetadata(BaseModel):
     """
     Metadata about analysis execution.
@@ -345,10 +436,20 @@ class ExecutionMetadata(BaseModel):
         description="Number of rules that failed with errors",
     )
     
-    # Future fields can be added here without changing AnalysisResult interface:
-    # analysis_duration_ms: float | None = None
-    # cache_hits: int = 0
-    # llm_calls: int = 0
+    rules_skipped: int = Field(
+        default=0,
+        description="Number of rules that were skipped (preconditions not met)",
+    )
+    
+    analysis_duration_ms: float | None = Field(
+        default=None,
+        description="Total analysis duration in milliseconds",
+    )
+    
+    cache_hit: bool = Field(
+        default=False,
+        description="Whether result was served from cache",
+    )
     
     @property
     def success_rate(self) -> float:
@@ -358,14 +459,35 @@ class ExecutionMetadata(BaseModel):
         return (self.rules_run - self.rules_failed) / self.rules_run
 
 
+class ReproducibilityInfo(BaseModel):
+    """
+    Hashes for reproducible analysis - enables bug reports.
+    
+    All inputs that affect output are hashed and exposed.
+    """
+    
+    model_config = ConfigDict(frozen=True)
+    
+    analysis_id: str = Field(..., description="Unique analysis identifier")
+    plan_hash: str = Field(..., description="Hash of the EXPLAIN plan structure")
+    sql_hash: str | None = Field(default=None, description="Hash of normalized SQL")
+    config_hash: str = Field(..., description="Hash of configuration")
+    rules_hash: str = Field(..., description="Hash of ruleset versions")
+    querysense_version: str = Field(..., description="QuerySense version")
+
+
 class AnalysisResult(BaseModel):
     """
     Complete result of analyzing an EXPLAIN output.
     
     Contains:
     - findings: All detected issues, sorted by severity
+    - rule_runs: Detailed status of each rule execution (PASS/SKIP/FAIL)
     - errors: Any rule execution errors (analysis continues despite errors)
     - metadata: Execution statistics (node count, timing, etc.)
+    - evidence_level: What data sources informed the analysis
+    - reproducibility: Hashes for bug reports and cache validation
+    - degraded: Whether analysis ran in degraded mode
     """
     
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -373,6 +495,11 @@ class AnalysisResult(BaseModel):
     findings: tuple[Finding, ...] = Field(
         default_factory=tuple,
         description="All findings, sorted by severity",
+    )
+    
+    rule_runs: tuple[RuleRun, ...] = Field(
+        default_factory=tuple,
+        description="Detailed status of each rule execution",
     )
     
     errors: tuple[Any, ...] = Field(
@@ -383,6 +510,31 @@ class AnalysisResult(BaseModel):
     metadata: ExecutionMetadata = Field(
         default_factory=ExecutionMetadata,
         description="Execution metadata (timing, counts)",
+    )
+    
+    evidence_level: EvidenceLevel = Field(
+        default=EvidenceLevel.PLAN,
+        description="What data sources informed the analysis",
+    )
+    
+    sql_confidence: SQLConfidence = Field(
+        default=SQLConfidence.NONE,
+        description="Confidence level in SQL parsing",
+    )
+    
+    reproducibility: ReproducibilityInfo | None = Field(
+        default=None,
+        description="Hashes for reproducible bug reports",
+    )
+    
+    degraded: bool = Field(
+        default=False,
+        description="Whether analysis ran in degraded mode (some rules skipped/failed)",
+    )
+    
+    degraded_reasons: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Reasons for degraded mode",
     )
     
     # Convenience properties that delegate to metadata
@@ -400,6 +552,11 @@ class AnalysisResult(BaseModel):
     def rules_failed(self) -> int:
         """Number of rules that failed."""
         return self.metadata.rules_failed
+    
+    @property
+    def rules_skipped(self) -> int:
+        """Number of rules that were skipped."""
+        return self.metadata.rules_skipped
     
     @property
     def has_critical(self) -> bool:
@@ -420,13 +577,22 @@ class AnalysisResult(BaseModel):
         """Get all findings of a specific severity."""
         return [f for f in self.findings if f.severity == severity]
     
-    def summary(self) -> dict[str, int | float]:
+    def rule_runs_by_status(self, status: RuleRunStatus) -> list[RuleRun]:
+        """Get all rule runs with a specific status."""
+        return [r for r in self.rule_runs if r.status == status]
+    
+    def summary(self) -> dict[str, int | float | str | bool]:
         """Get a summary count by severity and success rate."""
         return {
             "total": len(self.findings),
             "critical": len(self.findings_by_severity(Severity.CRITICAL)),
             "warning": len(self.findings_by_severity(Severity.WARNING)),
             "info": len(self.findings_by_severity(Severity.INFO)),
-            "errors": len(self.errors),
+            "rules_passed": len(self.rule_runs_by_status(RuleRunStatus.PASS)),
+            "rules_skipped": len(self.rule_runs_by_status(RuleRunStatus.SKIP)),
+            "rules_failed": len(self.rule_runs_by_status(RuleRunStatus.FAIL)),
+            "evidence_level": self.evidence_level.value,
+            "sql_confidence": self.sql_confidence.value,
+            "degraded": self.degraded,
             "success_rate": self.metadata.success_rate,
         }
