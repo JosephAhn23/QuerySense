@@ -130,7 +130,6 @@ class CorrelatedSubquery(Rule):
                     "loops": loops,
                     "rows_per_loop": rows_per_loop,
                     "total_rows": total_rows,
-                    "node_type": node.node_type,
                 },
             )
             findings.append(finding)

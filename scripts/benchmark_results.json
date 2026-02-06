@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-02-06 09:37:45",
+  "results": [
+    {
+      "scale": 1000,
+      "total_time_seconds": 1.2964222999871708,
+      "plans_per_second": 771.3535936630338,
+      "peak_memory_mb": 7.392144203186035,
+      "total_findings": 2423,
+      "findings_by_severity": {
+        "warning": 2135,
+        "info": 163,
+        "critical": 125
+      },
+      "findings_by_rule": {
+        "SEQ_SCAN_LARGE_TABLE": 1153,
+        "PARALLEL_QUERY_NOT_USED": 886,
+        "SPILLING_TO_DISK": 142,
+        "BAD_ROW_ESTIMATE": 154,
+        "CORRELATED_SUBQUERY": 88
+      },
+      "errors": 0
+    }
+  ]
+}
