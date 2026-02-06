@@ -19,7 +19,19 @@ $ querysense analyze slow_query.json
 ## Install
 
 ```bash
-pip install -e .
+pip install querysense
+```
+
+Or with pipx (recommended for CLI tools):
+
+```bash
+pipx install querysense
+```
+
+**Optional AI features** (not required for core functionality):
+
+```bash
+pip install querysense[ai]  # Adds Claude-based explanations
 ```
 
 ## Usage
@@ -118,6 +130,24 @@ Stress-tested on 250,000 PostgreSQL query plans:
 - **0.00% error rate** - deterministic rule engine
 
 QuerySense handles fleet-scale databases.
+
+## Why QuerySense?
+
+| Feature | QuerySense | pgMustard | pganalyze | PEV2 |
+|---------|-----------|-----------|-----------|------|
+| **Price** | Free | $29/mo | $499/mo | Free |
+| **CLI tool** | Yes | No | No | No |
+| **Auto-detect issues** | Yes | Partial | Yes | No |
+| **Copy-paste SQL fixes** | Yes | Partial | Yes | No |
+| **Works offline** | Yes | No | No | Yes |
+| **MySQL support** | Yes | No | No | No |
+| **No account required** | Yes | No | No | Yes |
+
+**vs pgMustard:** Free, CLI-first, gives you copy-paste SQL fixes
+
+**vs pganalyze:** Focused on one thing (EXPLAIN analysis) and does it well
+
+**vs PEV2:** Doesn't just visualize - detects issues and suggests fixes automatically
 
 ## Philosophy
 
