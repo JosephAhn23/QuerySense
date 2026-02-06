@@ -1,14 +1,18 @@
 """
-QuerySense CLI - PostgreSQL query performance analyzer.
+QuerySense CLI - Database query performance analyzer.
+
+Supports PostgreSQL and MySQL EXPLAIN output.
 
 Usage:
     querysense analyze explain.json
+    querysense analyze --database mysql mysql_explain.json
     querysense analyze --help
 """
 
 from __future__ import annotations
 
 import json
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -22,9 +26,17 @@ from querysense.analyzer import Analyzer, Severity
 from querysense.parser import parse_explain, ParseError
 from querysense.parser.parser import validate_has_analyze
 
+
+class DatabaseType(str, Enum):
+    """Supported database types."""
+    postgres = "postgres"
+    mysql = "mysql"
+    auto = "auto"
+
+
 app = typer.Typer(
     name="querysense",
-    help="PostgreSQL query performance analyzer",
+    help="Database query performance analyzer (PostgreSQL & MySQL)",
     no_args_is_help=True,
 )
 
@@ -52,8 +64,29 @@ def main(
         ),
     ] = None,
 ) -> None:
-    """QuerySense - PostgreSQL query performance analyzer."""
+    """QuerySense - Database query performance analyzer."""
     pass
+
+
+def detect_database_type(data: dict | list) -> DatabaseType:
+    """Auto-detect database type from EXPLAIN output."""
+    # PostgreSQL format: list with Plan object
+    if isinstance(data, list) and len(data) > 0:
+        first = data[0]
+        if isinstance(first, dict):
+            # PostgreSQL has "Plan" key with "Node Type"
+            if "Plan" in first and "Node Type" in first.get("Plan", {}):
+                return DatabaseType.postgres
+            # MySQL traditional format has "type" and "select_type"
+            if "type" in first and "select_type" in first:
+                return DatabaseType.mysql
+    
+    # MySQL JSON format has "query_block"
+    if isinstance(data, dict) and "query_block" in data:
+        return DatabaseType.mysql
+    
+    # Default to PostgreSQL
+    return DatabaseType.postgres
 
 
 @app.command()
@@ -61,17 +94,25 @@ def analyze(
     explain_file: Annotated[
         Path,
         typer.Argument(
-            help="Path to EXPLAIN (FORMAT JSON) output file",
+            help="Path to EXPLAIN output file (JSON format)",
             exists=True,
             readable=True,
             resolve_path=True,
         ),
     ],
+    database: Annotated[
+        DatabaseType,
+        typer.Option(
+            "--database",
+            "-d",
+            help="Database type (auto-detected if not specified)",
+        ),
+    ] = DatabaseType.auto,
     require_analyze: Annotated[
         bool,
         typer.Option(
             "--require-analyze/--allow-plain",
-            help="Require EXPLAIN ANALYZE output (recommended)",
+            help="Require EXPLAIN ANALYZE output (PostgreSQL only)",
         ),
     ] = True,
     json_output: Annotated[
@@ -92,24 +133,54 @@ def analyze(
     ] = 10_000,
 ) -> None:
     """
-    Analyze a PostgreSQL EXPLAIN output for performance issues.
+    Analyze database EXPLAIN output for performance issues.
     
-    Example:
+    Supports PostgreSQL and MySQL.
     
+    Examples:
+    
+        # PostgreSQL
         $ psql -c "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users" > explain.json
         $ querysense analyze explain.json
+        
+        # MySQL
+        $ mysql -e "EXPLAIN FORMAT=JSON SELECT * FROM users" > explain.json
+        $ querysense analyze --database mysql explain.json
     """
     try:
-        # Parse the EXPLAIN output
-        output = parse_explain(explain_file)
+        # Read the file
+        raw_content = explain_file.read_text()
+        data = json.loads(raw_content)
         
-        # Validate ANALYZE data if required
-        if require_analyze:
-            validate_has_analyze(output)
+        # Auto-detect database type if needed
+        db_type = database
+        if db_type == DatabaseType.auto:
+            db_type = detect_database_type(data)
+            console.print(f"[dim]Detected database: {db_type.value}[/dim]\n")
         
-        # Run the analyzer
-        analyzer = Analyzer()
-        result = analyzer.analyze(output)
+        # Route to appropriate analyzer
+        if db_type == DatabaseType.mysql:
+            # MySQL analyzer
+            from querysense.analyzers.mysql import MySQLAnalyzer
+            
+            mysql_analyzer = MySQLAnalyzer()
+            parsed = mysql_analyzer.parse_plan(data)
+            findings = mysql_analyzer.detect_issues(parsed)
+            node_count = len(parsed.nodes)
+            rules_run = 5  # Number of MySQL rules
+            
+        else:
+            # PostgreSQL analyzer (default)
+            output = parse_explain(explain_file)
+            
+            if require_analyze:
+                validate_has_analyze(output)
+            
+            analyzer = Analyzer()
+            result = analyzer.analyze(output)
+            findings = result.findings
+            node_count = result.metadata.node_count
+            rules_run = result.metadata.rules_run
         
         # JSON output mode
         if json_output:
@@ -121,34 +192,35 @@ def analyze(
                         "title": f.title,
                         "description": f.description,
                         "suggestion": f.suggestion,
-                        "table": f.context.relation_name,
-                        "rows": f.context.actual_rows,
+                        "table": f.context.relation_name if f.context else None,
+                        "rows": f.context.actual_rows if f.context else None,
                     }
-                    for f in result.findings
+                    for f in findings
                 ],
                 "summary": {
-                    "findings_count": len(result.findings),
-                    "nodes_analyzed": result.metadata.node_count,
-                    "rules_run": result.metadata.rules_run,
+                    "findings_count": len(findings),
+                    "nodes_analyzed": node_count,
+                    "rules_run": rules_run,
+                    "database": db_type.value,
                 },
             }
             console.print_json(json.dumps(output_data, indent=2))
             return
         
         # Pretty output
-        if not result.findings:
+        if not findings:
             console.print(Panel(
                 "[green]No performance issues found![/green]\n\n"
-                f"Analyzed {result.metadata.node_count} nodes.",
+                f"Analyzed {node_count} nodes ({db_type.value}).",
                 title="QuerySense",
                 border_style="green",
             ))
             return
         
         # Show findings
-        console.print(f"\n[bold]Found {len(result.findings)} issue(s):[/bold]\n")
+        console.print(f"[bold]Found {len(findings)} issue(s):[/bold]\n")
         
-        for i, finding in enumerate(result.findings, 1):
+        for i, finding in enumerate(findings, 1):
             # Severity color
             if finding.severity == Severity.CRITICAL:
                 severity_style = "red bold"
@@ -172,7 +244,7 @@ def analyze(
             console.print()
         
         # Summary
-        console.print(f"[dim]Analyzed {result.metadata.node_count} nodes in {result.metadata.rules_run} rule(s)[/dim]")
+        console.print(f"[dim]Analyzed {node_count} nodes with {rules_run} rule(s) ({db_type.value})[/dim]")
         
     except ParseError as e:
         error_console.print(f"[red]Error:[/red] {e.message}")

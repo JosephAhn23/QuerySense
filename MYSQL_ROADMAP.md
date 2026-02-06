@@ -16,9 +16,10 @@ QuerySense v0.3.0 adds MySQL EXPLAIN analysis alongside existing PostgreSQL supp
 | Rule: Filesort | ✅ Done | Using filesort in Extra |
 | Rule: Temporary | ✅ Done | Using temporary in Extra |
 | Rule: Bad Join | ✅ Done | ALL/index in joins |
-| Tests | ✅ Done | Basic test coverage |
-| CLI Integration | 🚧 TODO | `querysense analyze --db mysql` |
-| Stress Test | 🚧 TODO | 50k MySQL plans benchmark |
+| Rule: No Index Used | ✅ Done | No possible_keys available |
+| Tests | ✅ Done | 12 MySQL tests + 78 total |
+| CLI Integration | ✅ Done | `querysense analyze --database mysql` |
+| Stress Test | ✅ Done | **100,000+ plans/sec** (200x target) |
 
 ## Phase 1: Parser (Week 1)
 

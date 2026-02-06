@@ -137,11 +137,43 @@ class BadJoinType(MySQLRule):
     def __init__(self, min_rows: int = 1_000):
         self.min_rows = min_rows
     
-    def check(self, node: MySQLPlanNode) -> bool:
+    def check(self, node: "MySQLPlanNode") -> bool:
         # Check if this is likely a join (not the first table)
         is_join = node.id > 1 or node.select_type in ("DEPENDENT SUBQUERY", "DERIVED")
         return (
             is_join 
             and node.access_type in self.BAD_TYPES 
             and node.rows >= self.min_rows
+        )
+
+
+class NoIndexUsed(MySQLRule):
+    """
+    Detect queries where no index could be used.
+    
+    This is different from MissingIndex - here possible_keys is NULL,
+    meaning MySQL couldn't find any index that could help with the query.
+    
+    This usually means:
+    - No indexes exist on the filtered columns
+    - The query uses functions on indexed columns (breaks index usage)
+    - LIKE pattern starts with wildcard (LIKE '%foo')
+    
+    Fix: Create an index on the WHERE clause columns.
+    """
+    
+    rule_id = "MYSQL_NO_INDEX_USED"
+    description = "No index available for query"
+    
+    def __init__(self, min_rows: int = 1_000):
+        self.min_rows = min_rows
+    
+    def check(self, node: "MySQLPlanNode") -> bool:
+        # No possible keys and scanning significant rows with a filter
+        has_where = "where" in node.extra.lower()
+        return (
+            not node.possible_keys 
+            and node.key is None 
+            and node.rows >= self.min_rows
+            and has_where
         )

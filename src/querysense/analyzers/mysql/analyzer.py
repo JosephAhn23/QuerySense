@@ -58,9 +58,13 @@ class MySQLAnalyzer(BaseAnalyzer):
             if node.is_full_table_scan and node.rows >= self.LARGE_TABLE_THRESHOLD:
                 findings.append(self._finding_full_table_scan(node, i))
             
-            # Possible index not used
+            # Possible index not used (but indexes exist)
             if node.has_unused_index:
                 findings.append(self._finding_missing_index(node, i))
+            
+            # No index available at all
+            elif self._is_no_index_used(node):
+                findings.append(self._finding_no_index(node, i))
             
             # Using filesort
             if node.is_using_filesort and node.rows >= 1000:
@@ -71,6 +75,16 @@ class MySQLAnalyzer(BaseAnalyzer):
                 findings.append(self._finding_temporary(node, i))
         
         return findings
+    
+    def _is_no_index_used(self, node: MySQLPlanNode) -> bool:
+        """Check if no index is available for this query."""
+        has_where = "where" in node.extra.lower()
+        return (
+            not node.possible_keys 
+            and node.key is None 
+            and node.rows >= 1000
+            and has_where
+        )
     
     def suggest_fix(self, finding: Finding) -> str:
         """Generate SQL fix for a finding."""
@@ -176,7 +190,25 @@ class MySQLAnalyzer(BaseAnalyzer):
             },
         )
     
-    def _suggest_index(self, node) -> str:
+    def _finding_no_index(self, node: MySQLPlanNode, index: int = 0) -> Finding:
+        """Create finding for no index available."""
+        return Finding(
+            rule_id="MYSQL_NO_INDEX_USED",
+            severity=Severity.WARNING if node.rows < 50_000 else Severity.CRITICAL,
+            context=self._create_context(node, index),
+            title=f"No index available for {node.table} ({node.rows:,} rows)",
+            description=(
+                f"MySQL couldn't find any index to use for this query on '{node.table}'. "
+                f"This results in a full table scan of {node.rows:,} rows."
+            ),
+            suggestion=self._suggest_index(node),
+            metrics={
+                "rows": node.rows,
+                "filtered": int(node.filtered),
+            },
+        )
+    
+    def _suggest_index(self, node: MySQLPlanNode) -> str:
         """Generate index suggestion for a table."""
         return (
             f"-- Add index on filtered columns\n"

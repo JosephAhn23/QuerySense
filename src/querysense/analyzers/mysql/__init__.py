@@ -15,6 +15,7 @@ from querysense.analyzers.mysql.rules import (
     UsingFilesort,
     UsingTemporary,
     BadJoinType,
+    NoIndexUsed,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "UsingFilesort",
     "UsingTemporary",
     "BadJoinType",
+    "NoIndexUsed",
 ]
