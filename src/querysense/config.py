@@ -58,31 +58,8 @@ class Environment(str, Enum):
             return cls.DEVELOPMENT
 
 
-class EvidenceLevel(str, Enum):
-    """
-    Evidence level for analysis - explicitly tracks what data sources inform findings.
-    
-    PLAN: EXPLAIN JSON only - findings are plan-evidenced
-    PLAN_SQL: EXPLAIN JSON + SQL - findings include SQL-derived hypotheses
-    PLAN_SQL_DB: EXPLAIN + SQL + DB facts - findings are validated recommendations
-    """
-    
-    PLAN = "PLAN"
-    PLAN_SQL = "PLAN+SQL"
-    PLAN_SQL_DB = "PLAN+SQL+DB"
-
-
-class ImpactBand(str, Enum):
-    """
-    Impact band for recommendations - replaces specific multiplier claims.
-    
-    Never overclaim: use bands instead of "57x faster".
-    """
-    
-    LOW = "LOW"          # Minor improvement expected
-    MEDIUM = "MEDIUM"    # Moderate improvement expected  
-    HIGH = "HIGH"        # Significant improvement expected
-    UNKNOWN = "UNKNOWN"  # Cannot estimate without more data
+# Note: EvidenceLevel and ImpactBand are defined in querysense.analyzer.models
+# to avoid circular imports. Import from there if needed.
 
 
 @dataclass
@@ -142,7 +119,7 @@ class Config(BaseModel):
     
     # Global settings
     querysense_version: str = Field(
-        default="0.5.0",
+        default="0.5.1",
         description="QuerySense version for cache invalidation",
     )
     

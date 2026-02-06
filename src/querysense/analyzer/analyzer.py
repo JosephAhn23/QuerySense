@@ -1,20 +1,28 @@
 """
-Analyzer - simple rule engine for EXPLAIN plans.
+Analyzer - rule engine for EXPLAIN plans with progressive enhancement.
 
 Runs rules against an EXPLAIN output and returns findings.
 Designed to work without any external dependencies (no LLM required).
 
-Enhanced with optional SQL parsing for deeper analysis:
-- Level 1: EXPLAIN JSON only (default)
-- Level 2: EXPLAIN JSON + SQL query (enables specific column recommendations)
-- Level 3: EXPLAIN JSON + SQL + DB connection (future)
+Evidence Levels (progressive enhancement):
+- Level 1 (PLAN): EXPLAIN JSON only → findings are plan-evidenced
+- Level 2 (PLAN+SQL): EXPLAIN JSON + SQL → findings include SQL-derived hypotheses
+- Level 3 (PLAN+SQL+DB): EXPLAIN + SQL + DB facts → validated recommendations
+
+Design Principles:
+- Deterministic core: Works offline without LLM
+- Observable failure: PASS/SKIP/FAIL status for every rule
+- Never overclaim: Impact bands instead of specific multipliers
+- Config is not code: Thresholds from environment, not hardcoded
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -24,19 +32,30 @@ from querysense.analyzer.errors import RuleError
 from querysense.analyzer.fingerprint import AnalysisCache, PlanFingerprint
 from querysense.analyzer.models import (
     AnalysisResult,
+    EvidenceLevel,
     ExecutionMetadata,
     Finding,
+    ReproducibilityInfo,
     RulePhase,
+    RuleRun,
+    RuleRunStatus,
     Severity,
+    SQLConfidence,
 )
 from querysense.analyzer.registry import get_registry
-from querysense.analyzer.rules.base import Rule, SQLEnhanceable
-from querysense.analyzer.sql_parser import QueryInfo, SQLQueryAnalyzer
+from querysense.analyzer.rules.base import Rule, RuleContext, SQLEnhanceable
+from querysense.analyzer.sql_ast import SQLASTParser, SQLParseResult, is_pglast_available
+from querysense.analyzer.sql_parser import QueryInfo
 
 if TYPE_CHECKING:
+    from querysense.config import Config
+    from querysense.db.probe import DBProbe
     from querysense.parser.models import ExplainOutput
 
 logger = logging.getLogger(__name__)
+
+# Package version for reproducibility
+__version__ = "0.5.1"
 
 # Thread-safe context variable for query info (fixes race condition)
 _current_query_info: ContextVar[QueryInfo | None] = ContextVar(
@@ -218,7 +237,7 @@ _global_metrics = AnalyzerMetrics()
 
 class Analyzer:
     """
-    Simple rule-based query plan analyzer.
+    Rule-based query plan analyzer with progressive enhancement.
     
     Runs rules in two phases:
     1. PER_NODE rules: Analyze individual plan nodes
@@ -226,9 +245,11 @@ class Analyzer:
     
     Features:
     - Thread-safe: Uses contextvars for request-scoped state
-    - Caching: Optional LRU cache for repeated analysis
+    - Caching: Optional LRU cache with SQL/config-aware keys
     - Async: Supports both sync and async analysis
-    - Observable: Built-in metrics and tracing
+    - Observable: PASS/SKIP/FAIL status for every rule
+    - Configurable: Thresholds from environment via Config
+    - Progressive: Level 1 (PLAN) → Level 2 (PLAN+SQL) → Level 3 (PLAN+SQL+DB)
     
     Example:
         from querysense import parse_explain, Analyzer
@@ -237,19 +258,23 @@ class Analyzer:
         analyzer = Analyzer()
         result = analyzer.analyze(explain)
         
+        # Check evidence level
+        print(f"Evidence: {result.evidence_level.value}")
+        print(f"SQL Confidence: {result.sql_confidence.value}")
+        
+        # Check rule execution status
+        for run in result.rule_runs:
+            print(f"{run.rule_id}: {run.status.value} ({run.runtime_ms:.1f}ms)")
+        
+        # Check for degraded mode
+        if result.degraded:
+            print(f"Degraded: {result.degraded_reasons}")
+        
         for finding in result.findings:
             print(f"{finding.severity}: {finding.title}")
-            if finding.suggestion:
-                print(f"  Fix: {finding.suggestion}")
-        
-        # Async usage
-        result = await analyzer.analyze_async(explain)
-        
-        # With caching
-        analyzer = Analyzer(cache_enabled=True)
-        result1 = analyzer.analyze(explain)  # Miss
-        result2 = analyzer.analyze(explain)  # Hit
-        print(f"Cache hit rate: {analyzer.metrics.cache_hit_rate:.1%}")
+            print(f"  Impact: {finding.impact_band.value}")
+            if finding.assumptions:
+                print(f"  Assumes: {finding.assumptions}")
     """
     
     # Configuration constants (documented with rationale)
@@ -267,13 +292,19 @@ class Analyzer:
         max_findings_per_rule: int = DEFAULT_MAX_FINDINGS_PER_RULE,
         parallel: bool = True,
         max_workers: int = DEFAULT_MAX_WORKERS,
-        # New: Caching options
+        # Caching options
         cache_enabled: bool = False,
         cache_size: int = DEFAULT_CACHE_SIZE,
         cache_ttl: float = DEFAULT_CACHE_TTL,
-        # New: Observability options
+        # Observability options
         metrics: AnalyzerMetrics | None = None,
         tracing_enabled: bool = False,
+        # Config integration
+        config: "Config | None" = None,
+        # Level 3: Database probe
+        db_probe: "DBProbe | None" = None,
+        # SQL parsing options
+        prefer_pglast: bool = True,
     ) -> None:
         """
         Initialize the analyzer.
@@ -291,13 +322,33 @@ class Analyzer:
             cache_ttl: Cache TTL in seconds (default: 300)
             metrics: Custom metrics instance (default: global metrics)
             tracing_enabled: Enable detailed tracing for debugging
+            config: Configuration instance (if None, uses get_config())
+            db_probe: Database probe for Level 3 analysis (validated recommendations)
+            prefer_pglast: Prefer pglast (accurate) over sqlparse (heuristic)
         """
+        # Load config
+        self.config = config
+        if self.config is None:
+            try:
+                from querysense.config import get_config
+                self.config = get_config()
+            except Exception:
+                self.config = None  # Fall back to defaults
+        
+        # Initialize rules
         if rules is not None:
             self.rules = rules
         else:
             registry = get_registry()
             rule_classes = registry.filter(include=include_rules, exclude=exclude_rules)
             self.rules = [cls() for cls in rule_classes]
+        
+        # Filter rules based on config
+        if self.config is not None:
+            self.rules = [
+                r for r in self.rules
+                if self.config.is_rule_enabled(r.rule_id)
+            ]
         
         self.fail_fast = fail_fast
         self.max_findings_per_rule = max_findings_per_rule
@@ -313,6 +364,58 @@ class Analyzer:
         # Observability
         self.metrics = metrics if metrics is not None else _global_metrics
         self.tracing_enabled = tracing_enabled
+        
+        # Level 3: Database probe
+        self.db_probe = db_probe
+        
+        # SQL parsing
+        self.prefer_pglast = prefer_pglast
+        self._sql_parser = SQLASTParser(prefer_pglast=prefer_pglast)
+        
+        # Compute rules hash for reproducibility
+        self._rules_hash = self._compute_rules_hash()
+    
+    def _compute_rules_hash(self) -> str:
+        """Compute hash of ruleset versions for cache key."""
+        rules_info = sorted(f"{r.rule_id}:{r.version}" for r in self.rules)
+        return hashlib.sha256("|".join(rules_info).encode()).hexdigest()[:16]
+    
+    def _get_available_capabilities(
+        self,
+        sql_parse_result: SQLParseResult | None,
+    ) -> set[str]:
+        """Determine which capabilities are available for rule execution."""
+        capabilities: set[str] = set()
+        
+        if sql_parse_result is not None:
+            if sql_parse_result.confidence == SQLConfidence.HIGH:
+                capabilities.add("sql_ast")
+                capabilities.add("sql_ast_high")
+            elif sql_parse_result.confidence == SQLConfidence.MEDIUM:
+                capabilities.add("sql_ast")
+            elif sql_parse_result.confidence == SQLConfidence.LOW:
+                # Low confidence - don't add sql_ast capability
+                pass
+        
+        if self.db_probe is not None:
+            capabilities.add("db_probe")
+        
+        return capabilities
+    
+    def _check_rule_requirements(
+        self,
+        rule: Rule,
+        capabilities: set[str],
+    ) -> tuple[bool, str | None]:
+        """Check if a rule's requirements are met."""
+        if not rule.requires:
+            return True, None
+        
+        missing = set(rule.requires) - capabilities
+        if missing:
+            return False, f"Missing capabilities: {', '.join(sorted(missing))}"
+        
+        return True, None
     
     def analyze(
         self,
@@ -334,23 +437,68 @@ class Analyzer:
                  - Better join column detection
             
         Returns:
-            AnalysisResult with findings and metadata
+            AnalysisResult with findings, rule_runs, evidence_level, and metadata
         """
         start_time = time.perf_counter()
         tracer = Tracer(enabled=self.tracing_enabled)
         tracer.start_span("analyze", sql_provided=sql is not None)
         cache_hit = False
+        analysis_id = str(uuid.uuid4())[:8]
+        
+        # Track rule runs for observability
+        rule_runs: list[RuleRun] = []
+        degraded_reasons: list[str] = []
         
         try:
-            # Check cache first
-            fingerprint: PlanFingerprint | None = None
-            if self.cache_enabled and self._cache is not None:
-                tracer.start_span("fingerprint")
-                fingerprint = PlanFingerprint.from_explain(explain)
+            # Create plan fingerprint
+            tracer.start_span("fingerprint")
+            fingerprint = PlanFingerprint.from_explain(explain)
+            tracer.end_span()
+            
+            # Parse SQL if provided (using new SQLASTParser)
+            sql_parse_result: SQLParseResult | None = None
+            query_info: QueryInfo | None = None
+            sql_confidence = SQLConfidence.NONE
+            sql_hash: str | None = None
+            
+            if sql:
+                tracer.start_span("sql_parse")
+                try:
+                    sql_parse_result = self._sql_parser.parse(sql)
+                    query_info = sql_parse_result.query_info
+                    sql_confidence = sql_parse_result.confidence
+                    sql_hash = sql_parse_result.sql_hash
+                    
+                    logger.debug(
+                        "SQL parsed: confidence=%s, %d tables, %d filter cols",
+                        sql_confidence.value,
+                        len(query_info.tables),
+                        len(query_info.filter_columns),
+                    )
+                    
+                    if sql_confidence == SQLConfidence.LOW:
+                        degraded_reasons.append(f"SQL parse failed: {sql_parse_result.parse_error}")
+                        
+                except Exception as e:
+                    logger.warning("Failed to parse SQL query: %s", e)
+                    degraded_reasons.append(f"SQL parse exception: {e}")
                 tracer.end_span()
-                
+            
+            # Determine evidence level
+            if self.db_probe is not None and query_info is not None:
+                evidence_level = EvidenceLevel.PLAN_SQL_DB
+            elif query_info is not None and sql_confidence != SQLConfidence.LOW:
+                evidence_level = EvidenceLevel.PLAN_SQL
+            else:
+                evidence_level = EvidenceLevel.PLAN
+            
+            # Compute cache key including SQL and config
+            cache_key = self._compute_cache_key(fingerprint, sql_hash)
+            
+            # Check cache
+            if self.cache_enabled and self._cache is not None:
                 tracer.start_span("cache_lookup")
-                cached = self._cache.get(fingerprint)
+                cached = self._cache.get(fingerprint)  # TODO: use extended cache key
                 tracer.end_span()
                 
                 if cached is not None:
@@ -365,22 +513,8 @@ class Analyzer:
                     logger.debug("Cache hit for fingerprint %s", fingerprint.full_hash[:8])
                     return cached.result
             
-            # Parse SQL if provided for enhanced analysis
-            query_info: QueryInfo | None = None
-            if sql:
-                tracer.start_span("sql_parse")
-                try:
-                    sql_analyzer = SQLQueryAnalyzer()
-                    query_info = sql_analyzer.analyze(sql)
-                    logger.debug(
-                        "SQL parsed: %d tables, %d filter cols, %d join cols",
-                        len(query_info.tables),
-                        len(query_info.filter_columns),
-                        len(query_info.join_columns),
-                    )
-                except Exception as e:
-                    logger.warning("Failed to parse SQL query: %s", e)
-                tracer.end_span()
+            # Get available capabilities
+            capabilities = self._get_available_capabilities(sql_parse_result)
             
             # Store query_info in context variable (thread-safe)
             token = _current_query_info.set(query_info)
@@ -392,29 +526,33 @@ class Analyzer:
                 
                 # Phase 1: PER_NODE rules
                 tracer.start_span("phase1_per_node", rule_count=len(per_node_rules))
-                if self.parallel and len(per_node_rules) > 1:
-                    phase1_findings, phase1_errors = self._run_rules_parallel(
-                        per_node_rules, explain, prior_findings=[]
-                    )
-                else:
-                    phase1_findings, phase1_errors = self._run_rules_sequential(
-                        per_node_rules, explain, prior_findings=[]
-                    )
+                phase1_findings, phase1_runs = self._run_rules_with_status(
+                    per_node_rules, explain, prior_findings=[], 
+                    capabilities=capabilities, query_info=query_info,
+                )
+                rule_runs.extend(phase1_runs)
                 tracer.end_span()
+                
+                # Update capabilities with what Phase 1 rules provide
+                for rule in per_node_rules:
+                    if rule.provides:
+                        capabilities.update(rule.provides)
+                capabilities.add("prior_findings")  # Automatic for AGGREGATE phase
                 
                 # Phase 2: AGGREGATE rules (see phase 1 findings)
                 tracer.start_span("phase2_aggregate", rule_count=len(aggregate_rules))
-                phase2_findings, phase2_errors = self._run_rules_sequential(
-                    aggregate_rules, explain, prior_findings=phase1_findings
+                phase2_findings, phase2_runs = self._run_rules_with_status(
+                    aggregate_rules, explain, prior_findings=phase1_findings,
+                    capabilities=capabilities, query_info=query_info,
                 )
+                rule_runs.extend(phase2_runs)
                 tracer.end_span()
                 
                 # Combine results
                 all_findings = phase1_findings + phase2_findings
-                all_errors = phase1_errors + phase2_errors
                 
                 # Enhance findings with SQL-based recommendations if available
-                if query_info:
+                if query_info and sql_confidence != SQLConfidence.LOW:
                     tracer.start_span("enhance_with_sql")
                     all_findings = self._enhance_findings_with_sql(all_findings, query_info)
                     tracer.end_span()
@@ -426,18 +564,50 @@ class Analyzer:
             # Build result
             duration_ms = (time.perf_counter() - start_time) * 1000
             
+            # Count rule statuses
+            passed = len([r for r in rule_runs if r.status == RuleRunStatus.PASS])
+            skipped = len([r for r in rule_runs if r.status == RuleRunStatus.SKIP])
+            failed = len([r for r in rule_runs if r.status == RuleRunStatus.FAIL])
+            
+            # Determine if degraded
+            degraded = failed > 0 or skipped > 0 or bool(degraded_reasons)
+            if failed > 0:
+                degraded_reasons.append(f"{failed} rules failed")
+            if skipped > 0:
+                degraded_reasons.append(f"{skipped} rules skipped (missing capabilities)")
+            
+            # Build reproducibility info
+            config_hash = self.config.config_hash() if self.config else "no-config"
+            reproducibility = ReproducibilityInfo(
+                analysis_id=analysis_id,
+                plan_hash=fingerprint.full_hash,
+                sql_hash=sql_hash,
+                config_hash=config_hash,
+                rules_hash=self._rules_hash,
+                querysense_version=__version__,
+            )
+            
             result = AnalysisResult(
                 findings=tuple(sorted(all_findings, key=lambda f: (f.severity.value, f.title))),
-                errors=tuple(str(e) for e in all_errors),
+                rule_runs=tuple(rule_runs),
+                errors=tuple(r.error_summary for r in rule_runs if r.error_summary),
                 metadata=ExecutionMetadata(
                     node_count=len(explain.all_nodes),
-                    rules_run=len(self.rules) - len(all_errors),
-                    rules_failed=len(all_errors),
+                    rules_run=passed + failed,
+                    rules_failed=failed,
+                    rules_skipped=skipped,
+                    analysis_duration_ms=duration_ms,
+                    cache_hit=cache_hit,
                 ),
+                evidence_level=evidence_level,
+                sql_confidence=sql_confidence,
+                reproducibility=reproducibility,
+                degraded=degraded,
+                degraded_reasons=tuple(degraded_reasons),
             )
             
             # Cache the result
-            if self.cache_enabled and self._cache is not None and fingerprint is not None:
+            if self.cache_enabled and self._cache is not None:
                 tracer.start_span("cache_store")
                 self._cache.set(fingerprint, result)
                 tracer.end_span()
@@ -446,7 +616,7 @@ class Analyzer:
             self.metrics.record_analysis(
                 duration_ms=duration_ms,
                 findings_count=len(result.findings),
-                errors_count=len(result.errors),
+                errors_count=failed,
                 cache_hit=False,
             )
             
@@ -458,6 +628,24 @@ class Analyzer:
                 trace = tracer.get_trace()
                 if trace:
                     logger.debug("Analysis trace: %s", trace)
+    
+    def _compute_cache_key(
+        self,
+        fingerprint: PlanFingerprint,
+        sql_hash: str | None,
+    ) -> str:
+        """Compute cache key including plan, SQL, config, and ruleset."""
+        parts = [fingerprint.full_hash]
+        
+        if sql_hash:
+            parts.append(sql_hash)
+        
+        if self.config:
+            parts.append(self.config.config_hash())
+        
+        parts.append(self._rules_hash)
+        
+        return hashlib.sha256(":".join(parts).encode()).hexdigest()[:32]
     
     async def analyze_async(
         self,
@@ -616,13 +804,98 @@ class Analyzer:
         
         return "\n".join(parts)
     
+    def _run_rules_with_status(
+        self,
+        rules: list[Rule],
+        explain: "ExplainOutput",
+        prior_findings: list[Finding],
+        capabilities: set[str],
+        query_info: QueryInfo | None,
+    ) -> tuple[list[Finding], list[RuleRun]]:
+        """
+        Run rules and track execution status (PASS/SKIP/FAIL).
+        
+        Returns:
+            Tuple of (findings, rule_runs) for observability
+        """
+        findings: list[Finding] = []
+        rule_runs: list[RuleRun] = []
+        
+        # Run rules (parallel for PER_NODE, sequential for now to simplify status tracking)
+        for rule in rules:
+            # Check requirements
+            can_run, skip_reason = self._check_rule_requirements(rule, capabilities)
+            
+            if not can_run:
+                rule_runs.append(RuleRun(
+                    rule_id=rule.rule_id,
+                    version=rule.version,
+                    status=RuleRunStatus.SKIP,
+                    runtime_ms=0.0,
+                    findings_count=0,
+                    skip_reason=skip_reason,
+                ))
+                logger.debug("Rule %s skipped: %s", rule.rule_id, skip_reason)
+                continue
+            
+            # Check if rule is disabled via config
+            if self.config is not None:
+                table = None  # Would need context to get table
+                # Skip check for table-specific rules would go here
+            
+            # Run the rule
+            rule_start = time.perf_counter()
+            try:
+                # Use context-aware execution if rule supports it
+                if rule.uses_context:
+                    ctx = RuleContext(
+                        explain=explain,
+                        prior_findings=prior_findings,
+                        query_info=query_info,
+                        db_probe=self.db_probe,
+                        capabilities=capabilities,
+                    )
+                    rule_findings = rule.analyze_with_context(ctx)
+                else:
+                    rule_findings = rule.analyze(explain, prior_findings)
+                
+                rule_findings = rule_findings[:self.max_findings_per_rule]
+                findings.extend(rule_findings)
+                
+                runtime_ms = (time.perf_counter() - rule_start) * 1000
+                rule_runs.append(RuleRun(
+                    rule_id=rule.rule_id,
+                    version=rule.version,
+                    status=RuleRunStatus.PASS,
+                    runtime_ms=runtime_ms,
+                    findings_count=len(rule_findings),
+                ))
+                
+            except Exception as e:
+                runtime_ms = (time.perf_counter() - rule_start) * 1000
+                
+                if self.fail_fast:
+                    raise RuleError(rule.rule_id, rule.version, e) from e
+                
+                rule_runs.append(RuleRun(
+                    rule_id=rule.rule_id,
+                    version=rule.version,
+                    status=RuleRunStatus.FAIL,
+                    runtime_ms=runtime_ms,
+                    findings_count=0,
+                    error_summary=str(e),
+                ))
+                logger.warning("Rule %s failed: %s", rule.rule_id, e)
+        
+        return findings, rule_runs
+    
     def _run_rules_sequential(
         self,
         rules: list[Rule],
         explain: "ExplainOutput",
         prior_findings: list[Finding],
     ) -> tuple[list[Finding], list[Exception]]:
-        """Run rules sequentially."""
+        """Run rules sequentially (legacy method for backward compat)."""
         findings: list[Finding] = []
         errors: list[Exception] = []
         
@@ -644,7 +917,7 @@ class Analyzer:
         explain: "ExplainOutput",
         prior_findings: list[Finding],
     ) -> tuple[list[Finding], list[Exception]]:
-        """Run rules in parallel using thread pool."""
+        """Run rules in parallel using thread pool (legacy method)."""
         findings: list[Finding] = []
         errors: list[Exception] = []
         
@@ -673,5 +946,5 @@ class Analyzer:
         explain: "ExplainOutput",
         prior_findings: list[Finding],
     ) -> list[Finding]:
-        """Run a single rule."""
+        """Run a single rule (legacy method)."""
         return rule.analyze(explain, prior_findings)

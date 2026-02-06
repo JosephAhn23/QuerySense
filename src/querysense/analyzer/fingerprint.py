@@ -43,9 +43,12 @@ class PlanFingerprint:
         query_text = explain.query_text or ""
         query_hash = hashlib.sha256(query_text.encode()).hexdigest()[:16]
         
+        # Get all nodes (iter_nodes is on PlanNode, not ExplainOutput)
+        all_nodes = explain.all_nodes
+        
         # Hash structure (node types and relations)
         structure_parts = []
-        for node in explain.iter_nodes():
+        for node in all_nodes:
             structure_parts.append(f"{node.node_type}:{node.relation_name or ''}")
         structure_hash = hashlib.sha256(
             "|".join(structure_parts).encode()
@@ -53,7 +56,7 @@ class PlanFingerprint:
         
         # Hash data (row counts, costs)
         data_parts = []
-        for node in explain.iter_nodes():
+        for node in all_nodes:
             data_parts.append(f"{node.actual_rows}:{node.total_cost:.2f}")
         data_hash = hashlib.sha256(
             "|".join(data_parts).encode()
@@ -63,7 +66,7 @@ class PlanFingerprint:
             query_hash=query_hash,
             structure_hash=structure_hash,
             data_hash=data_hash,
-            node_count=len(explain.all_nodes),
+            node_count=len(all_nodes),
         )
     
     @property

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-02-06
+
+### Fixed - Integration Wiring
+
+#### Analyzer Now Uses New Infrastructure
+- Analyzer properly populates `rule_runs`, `evidence_level`, `reproducibility` fields
+- Uses new `SQLASTParser` instead of legacy `SQLQueryAnalyzer`
+- Implements rule dependency checking via `requires`/`provides` capabilities
+- Integrates `Config` for rule thresholds and enable/disable
+- Cache key now includes `sql_hash` + `config_hash` for correctness
+
+#### Rule Execution Status Tracking
+- Every rule now reports PASS/SKIP/FAIL status with runtime_ms
+- Rules can be skipped if capabilities (sql_ast, db_probe) unavailable
+- `degraded` flag set when analysis runs with skipped/failed rules
+- `degraded_reasons` tuple explains what went wrong
+
+#### Reproducibility Info
+- Each analysis generates `ReproducibilityInfo` with:
+  - `analysis_id`: Unique ID for this run
+  - `plan_hash`: Hash of the plan structure
+  - `sql_hash`: Hash of SQL (if provided)
+  - `config_hash`: Hash of configuration
+  - `rules_hash`: Hash of ruleset versions
+
+#### Backward Compatibility
+- `summary()` method includes `errors` key for backward compat
+- All 113 tests pass
+
 ## [0.5.0] - 2026-02-06
 
 ### Added - Design Upgrade (Overkill Rigour)

@@ -583,14 +583,16 @@ class AnalysisResult(BaseModel):
     
     def summary(self) -> dict[str, int | float | str | bool]:
         """Get a summary count by severity and success rate."""
+        errors = len(self.rule_runs_by_status(RuleRunStatus.FAIL))
         return {
             "total": len(self.findings),
             "critical": len(self.findings_by_severity(Severity.CRITICAL)),
             "warning": len(self.findings_by_severity(Severity.WARNING)),
             "info": len(self.findings_by_severity(Severity.INFO)),
+            "errors": errors,  # Backward compat: alias for rules_failed
             "rules_passed": len(self.rule_runs_by_status(RuleRunStatus.PASS)),
             "rules_skipped": len(self.rule_runs_by_status(RuleRunStatus.SKIP)),
-            "rules_failed": len(self.rule_runs_by_status(RuleRunStatus.FAIL)),
+            "rules_failed": errors,
             "evidence_level": self.evidence_level.value,
             "sql_confidence": self.sql_confidence.value,
             "degraded": self.degraded,
