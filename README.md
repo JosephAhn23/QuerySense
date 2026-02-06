@@ -2,6 +2,8 @@
 
 Analyze PostgreSQL EXPLAIN plans and get actionable performance fixes.
 
+![QuerySense: 2.3s → 0.04s with one index](query.png)
+
 ```bash
 $ querysense analyze slow_query.json
 
