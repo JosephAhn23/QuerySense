@@ -1,6 +1,6 @@
 """QuerySense - Database query performance analyzer for PostgreSQL and MySQL."""
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 __license__ = "MIT"
 
 # Public API exports

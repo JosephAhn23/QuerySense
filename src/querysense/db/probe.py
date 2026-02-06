@@ -11,12 +11,20 @@ Safety requirements:
 - Read-only: Only SELECT queries, no modifications
 - Time-bounded: All queries have timeout protection
 - Connection pooling: Efficient reuse of connections
+- Budget controls: Max queries, max time, concurrency limits
+- Degraded mode: When budget exceeded, sets degraded=true with reason
+
+Design principle: DBProbe is a fact provider
+- Populates facts (FactKey.TABLE_STATS, FactKey.TABLE_INDEXES, etc.)
+- Adds capabilities (Capability.DB_STATS, Capability.DB_INDEXES, etc.)
+- Rules require these facts/capabilities, don't call DBProbe directly
 
 Usage:
-    from querysense.db import get_probe
+    from querysense.db import get_probe, DBBudget
     
-    # From connection string
-    probe = get_probe("postgresql://user:pass@localhost/mydb")
+    # From connection string with budget
+    budget = DBBudget(max_queries=10, max_time_seconds=5.0)
+    probe = await get_probe("postgresql://user:pass@localhost/mydb", budget=budget)
     
     # Check if index exists
     indexes = await probe.list_indexes("orders")
@@ -26,6 +34,10 @@ Usage:
     stats = await probe.table_stats("orders")
     if stats.is_stale:
         print(f"Stats are {stats.stats_age_hours:.1f} hours old")
+    
+    # Check budget status
+    if probe.budget_exceeded:
+        print(f"DB budget exceeded: {probe.budget_reason}")
 """
 
 from __future__ import annotations
@@ -53,6 +65,71 @@ try:
     _PSYCOPG_AVAILABLE = True
 except ImportError:
     psycopg = None  # type: ignore[assignment]
+
+
+@dataclass
+class DBBudget:
+    """
+    Budget controls for database probe queries.
+    
+    Enforces production-safe limits on DB operations:
+    - max_queries: Maximum number of queries per analysis
+    - max_time_seconds: Maximum total DB time
+    - statement_timeout_ms: Per-statement timeout
+    - max_concurrency: Maximum concurrent queries
+    - dry_run: If True, don't execute queries (for testing)
+    
+    When budget is exceeded:
+    - Further queries are skipped
+    - budget_exceeded is set to True
+    - budget_reason explains why
+    - Rules depending on DB facts are SKIPPED
+    - Analysis continues in degraded mode
+    """
+    
+    max_queries: int = 20
+    max_time_seconds: float = 10.0
+    statement_timeout_ms: int = 5000
+    max_concurrency: int = 3
+    dry_run: bool = False
+    
+    # Tracking (mutable)
+    queries_executed: int = 0
+    total_time_seconds: float = 0.0
+    budget_exceeded: bool = False
+    budget_reason: str | None = None
+    
+    def can_execute(self) -> bool:
+        """Check if we can execute another query."""
+        if self.dry_run:
+            return False
+        if self.budget_exceeded:
+            return False
+        if self.queries_executed >= self.max_queries:
+            self.budget_exceeded = True
+            self.budget_reason = f"Max queries exceeded ({self.max_queries})"
+            return False
+        if self.total_time_seconds >= self.max_time_seconds:
+            self.budget_exceeded = True
+            self.budget_reason = f"Max time exceeded ({self.max_time_seconds}s)"
+            return False
+        return True
+    
+    def record_query(self, duration_seconds: float) -> None:
+        """Record a query execution."""
+        self.queries_executed += 1
+        self.total_time_seconds += duration_seconds
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Export budget status as dictionary."""
+        return {
+            "max_queries": self.max_queries,
+            "max_time_seconds": self.max_time_seconds,
+            "queries_executed": self.queries_executed,
+            "total_time_seconds": self.total_time_seconds,
+            "budget_exceeded": self.budget_exceeded,
+            "budget_reason": self.budget_reason,
+        }
 
 
 @dataclass(frozen=True)

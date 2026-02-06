@@ -62,21 +62,21 @@ class TestAnalysisResultStability:
         """AnalysisResult must have findings attribute."""
         from querysense.analyzer.models import AnalysisResult
         
-        result = AnalysisResult()
+        result = AnalysisResult.empty()
         assert hasattr(result, "findings")
 
     def test_analysis_result_has_errors(self) -> None:
         """AnalysisResult must have errors attribute."""
         from querysense.analyzer.models import AnalysisResult
         
-        result = AnalysisResult()
+        result = AnalysisResult.empty()
         assert hasattr(result, "errors")
 
     def test_analysis_result_has_metadata(self) -> None:
         """AnalysisResult must have metadata attribute."""
         from querysense.analyzer.models import AnalysisResult
         
-        result = AnalysisResult()
+        result = AnalysisResult.empty()
         assert hasattr(result, "metadata")
 
 
@@ -250,7 +250,7 @@ class TestJSONOutputStability:
         """AnalysisResult must be JSON serializable."""
         from querysense.analyzer.models import AnalysisResult
         
-        result = AnalysisResult()
+        result = AnalysisResult.empty()
         
         # Must be serializable without error
         json_str = result.model_dump_json()

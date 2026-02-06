@@ -28,6 +28,15 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
+from querysense.analyzer.capabilities import (
+    Capability,
+    CycleDetectedError,
+    FactKey,
+    FactStore,
+    build_rule_dag,
+    check_requirements,
+)
+from querysense.analyzer.context import AnalysisContext
 from querysense.analyzer.errors import RuleError
 from querysense.analyzer.fingerprint import AnalysisCache, PlanFingerprint
 from querysense.analyzer.models import (
@@ -41,6 +50,7 @@ from querysense.analyzer.models import (
     RuleRunStatus,
     Severity,
     SQLConfidence,
+    compute_evidence_level,
 )
 from querysense.analyzer.registry import get_registry
 from querysense.analyzer.rules.base import Rule, RuleContext, SQLEnhanceable
@@ -350,6 +360,16 @@ class Analyzer:
                 if self.config.is_rule_enabled(r.rule_id)
             ]
         
+        # Validate and sort rules by DAG
+        # This enforces correct execution order and detects cycles at startup
+        try:
+            self.rules = build_rule_dag(self.rules)
+            self._dag_validated = True
+        except CycleDetectedError as e:
+            logger.error("Rule dependency cycle detected: %s", e)
+            # In production, we could raise or fall back to phase-based execution
+            self._dag_validated = False
+        
         self.fail_fast = fail_fast
         self.max_findings_per_rule = max_findings_per_rule
         self.parallel = parallel
@@ -374,6 +394,17 @@ class Analyzer:
         
         # Compute rules hash for reproducibility
         self._rules_hash = self._compute_rules_hash()
+        
+        # Validate and sort rules by DAG (topological order)
+        try:
+            self.rules = build_rule_dag(self.rules)
+            self._dag_validated = True
+        except CycleDetectedError as e:
+            logger.error("Rule dependency cycle detected: %s", e)
+            self._dag_validated = False
+        except Exception as e:
+            logger.warning("Could not build rule DAG: %s. Using legacy execution.", e)
+            self._dag_validated = False
     
     def _compute_rules_hash(self) -> str:
         """Compute hash of ruleset versions for cache key."""
@@ -384,7 +415,7 @@ class Analyzer:
         self,
         sql_parse_result: SQLParseResult | None,
     ) -> set[str]:
-        """Determine which capabilities are available for rule execution."""
+        """Determine which capabilities are available (legacy string-based)."""
         capabilities: set[str] = set()
         
         if sql_parse_result is not None:
@@ -394,11 +425,27 @@ class Analyzer:
             elif sql_parse_result.confidence == SQLConfidence.MEDIUM:
                 capabilities.add("sql_ast")
             elif sql_parse_result.confidence == SQLConfidence.LOW:
-                # Low confidence - don't add sql_ast capability
                 pass
         
         if self.db_probe is not None:
             capabilities.add("db_probe")
+        
+        return capabilities
+    
+    def _get_available_capabilities_typed(
+        self,
+        ctx: AnalysisContext,
+    ) -> set[Capability]:
+        """Determine which typed capabilities are available for rule execution."""
+        capabilities: set[Capability] = set(ctx.capabilities)
+        
+        # Always have EXPLAIN_PLAN if we have the output
+        if ctx.has_fact(FactKey.EXPLAIN_OUTPUT):
+            capabilities.add(Capability.EXPLAIN_PLAN)
+        
+        # DB capabilities
+        if self.db_probe is not None:
+            capabilities.add(Capability.DB_CONNECTED)
         
         return capabilities
     
@@ -407,7 +454,7 @@ class Analyzer:
         rule: Rule,
         capabilities: set[str],
     ) -> tuple[bool, str | None]:
-        """Check if a rule's requirements are met."""
+        """Check if a rule's requirements are met (legacy string-based)."""
         if not rule.requires:
             return True, None
         
@@ -416,6 +463,15 @@ class Analyzer:
             return False, f"Missing capabilities: {', '.join(sorted(missing))}"
         
         return True, None
+    
+    def _check_rule_requirements_typed(
+        self,
+        rule: Rule,
+        capabilities: set[Capability],
+    ) -> tuple[bool, list[str]]:
+        """Check if a rule's requirements are met (typed Capability enum)."""
+        can_run, missing = check_requirements(rule, capabilities)
+        return can_run, missing
     
     def analyze(
         self,
@@ -513,10 +569,48 @@ class Analyzer:
                     logger.debug("Cache hit for fingerprint %s", fingerprint.full_hash[:8])
                     return cached.result
             
-            # Get available capabilities
-            capabilities = self._get_available_capabilities(sql_parse_result)
+            # Create fact store for this analysis
+            tracer.start_span("context_setup")
+            fact_store = FactStore()
             
-            # Store query_info in context variable (thread-safe)
+            # Add base capability
+            fact_store.add_capability(Capability.EXPLAIN_PLAN)
+            fact_store.set(FactKey.PLAN_FINGERPRINT, fingerprint, source_rule="analyzer")
+            fact_store.set(FactKey.PLAN_NODE_COUNT, len(explain.all_nodes), source_rule="analyzer")
+            
+            # Store SQL parse result as fact if available
+            if sql_parse_result:
+                fact_store.set(
+                    FactKey.SQL_HASH,
+                    sql_hash,
+                    source_rule="sql_parser",
+                    evidence_level=evidence_level.value,
+                )
+                fact_store.set(FactKey.SQL_CONFIDENCE, sql_confidence.value, source_rule="sql_parser")
+                if sql_parse_result.ast:
+                    fact_store.set(FactKey.SQL_AST, sql_parse_result.ast, source_rule="sql_parser")
+                if query_info:
+                    fact_store.set(FactKey.SQL_TABLES, query_info.tables, source_rule="sql_parser")
+                
+                # Add SQL-derived capabilities based on confidence
+                if sql_confidence == SQLConfidence.HIGH:
+                    fact_store.add_capability(Capability.SQL_AST)
+                    fact_store.add_capability(Capability.SQL_AST_HIGH)
+                    fact_store.add_capability(Capability.SQL_TABLES)
+                elif sql_confidence == SQLConfidence.MEDIUM:
+                    fact_store.add_capability(Capability.SQL_AST)
+                    fact_store.add_capability(Capability.SQL_TABLES)
+            
+            # Add DB probe capability if available
+            if self.db_probe is not None:
+                fact_store.add_capability(Capability.DB_CONNECTED)
+            
+            tracer.end_span()
+            
+            # Get available capabilities (typed) from fact store
+            capabilities = fact_store.capabilities
+            
+            # Store query_info in context variable (thread-safe for legacy rules)
             token = _current_query_info.set(query_info)
             
             try:
@@ -524,7 +618,7 @@ class Analyzer:
                 per_node_rules = [r for r in self.rules if r.phase == RulePhase.PER_NODE]
                 aggregate_rules = [r for r in self.rules if r.phase == RulePhase.AGGREGATE]
                 
-                # Phase 1: PER_NODE rules
+                # Phase 1: PER_NODE rules (DAG-sorted)
                 tracer.start_span("phase1_per_node", rule_count=len(per_node_rules))
                 phase1_findings, phase1_runs = self._run_rules_with_status(
                     per_node_rules, explain, prior_findings=[], 
@@ -535,9 +629,18 @@ class Analyzer:
                 
                 # Update capabilities with what Phase 1 rules provide
                 for rule in per_node_rules:
-                    if rule.provides:
-                        capabilities.update(rule.provides)
-                capabilities.add("prior_findings")  # Automatic for AGGREGATE phase
+                    for cap in rule.provides:
+                        if isinstance(cap, Capability):
+                            fact_store.add_capability(cap)
+                        elif isinstance(cap, str):
+                            try:
+                                fact_store.add_capability(Capability(cap))
+                            except ValueError:
+                                pass  # Unknown capability string
+                fact_store.add_capability(Capability.PRIOR_FINDINGS)
+                
+                # Update capabilities reference after adding new ones
+                capabilities = fact_store.capabilities
                 
                 # Phase 2: AGGREGATE rules (see phase 1 findings)
                 tracer.start_span("phase2_aggregate", rule_count=len(aggregate_rules))
@@ -561,7 +664,7 @@ class Analyzer:
                 # Reset context variable (thread-safe cleanup)
                 _current_query_info.reset(token)
             
-            # Build result
+            # Build result using factory method (enforces invariants)
             duration_ms = (time.perf_counter() - start_time) * 1000
             
             # Count rule statuses
@@ -569,14 +672,7 @@ class Analyzer:
             skipped = len([r for r in rule_runs if r.status == RuleRunStatus.SKIP])
             failed = len([r for r in rule_runs if r.status == RuleRunStatus.FAIL])
             
-            # Determine if degraded
-            degraded = failed > 0 or skipped > 0 or bool(degraded_reasons)
-            if failed > 0:
-                degraded_reasons.append(f"{failed} rules failed")
-            if skipped > 0:
-                degraded_reasons.append(f"{skipped} rules skipped (missing capabilities)")
-            
-            # Build reproducibility info
+            # Build reproducibility info (required, not optional)
             config_hash = self.config.config_hash() if self.config else "no-config"
             reproducibility = ReproducibilityInfo(
                 analysis_id=analysis_id,
@@ -587,23 +683,25 @@ class Analyzer:
                 querysense_version=__version__,
             )
             
-            result = AnalysisResult(
-                findings=tuple(sorted(all_findings, key=lambda f: (f.severity.value, f.title))),
-                rule_runs=tuple(rule_runs),
-                errors=tuple(r.error_summary for r in rule_runs if r.error_summary),
-                metadata=ExecutionMetadata(
-                    node_count=len(explain.all_nodes),
-                    rules_run=passed + failed,
-                    rules_failed=failed,
-                    rules_skipped=skipped,
-                    analysis_duration_ms=duration_ms,
-                    cache_hit=cache_hit,
-                ),
+            # Build metadata
+            metadata = ExecutionMetadata(
+                node_count=len(explain.all_nodes),
+                rules_run=passed + failed,
+                rules_failed=failed,
+                rules_skipped=skipped,
+                analysis_duration_ms=duration_ms,
+                cache_hit=cache_hit,
+            )
+            
+            # Use factory method - ensures all fields are populated correctly
+            result = AnalysisResult.create(
+                findings=all_findings,
+                rule_runs=rule_runs,
                 evidence_level=evidence_level,
                 sql_confidence=sql_confidence,
                 reproducibility=reproducibility,
-                degraded=degraded,
-                degraded_reasons=tuple(degraded_reasons),
+                metadata=metadata,
+                degraded_reasons=degraded_reasons,
             )
             
             # Cache the result
@@ -809,11 +907,14 @@ class Analyzer:
         rules: list[Rule],
         explain: "ExplainOutput",
         prior_findings: list[Finding],
-        capabilities: set[str],
+        capabilities: set[Capability],
         query_info: QueryInfo | None,
     ) -> tuple[list[Finding], list[RuleRun]]:
         """
         Run rules and track execution status (PASS/SKIP/FAIL).
+        
+        Uses typed Capability enum for dependency checking.
+        Rules are executed in DAG order (if DAG validation passed).
         
         Returns:
             Tuple of (findings, rule_runs) for observability
@@ -821,12 +922,16 @@ class Analyzer:
         findings: list[Finding] = []
         rule_runs: list[RuleRun] = []
         
-        # Run rules (parallel for PER_NODE, sequential for now to simplify status tracking)
+        # Convert capabilities to string set for legacy compatibility
+        cap_strings = {cap.value for cap in capabilities}
+        
+        # Run rules in order (DAG-sorted)
         for rule in rules:
-            # Check requirements
-            can_run, skip_reason = self._check_rule_requirements(rule, capabilities)
+            # Check requirements using typed capabilities
+            can_run, missing = self._check_rule_requirements_typed(rule, capabilities)
             
             if not can_run:
+                skip_reason = f"Missing capabilities: {', '.join(missing)}"
                 rule_runs.append(RuleRun(
                     rule_id=rule.rule_id,
                     version=rule.version,
@@ -838,10 +943,10 @@ class Analyzer:
                 logger.debug("Rule %s skipped: %s", rule.rule_id, skip_reason)
                 continue
             
-            # Check if rule is disabled via config
+            # Check if rule is disabled via config for specific tables
             if self.config is not None:
-                table = None  # Would need context to get table
-                # Skip check for table-specific rules would go here
+                # Table-specific skip check would go here
+                pass
             
             # Run the rule
             rule_start = time.perf_counter()
@@ -853,7 +958,7 @@ class Analyzer:
                         prior_findings=prior_findings,
                         query_info=query_info,
                         db_probe=self.db_probe,
-                        capabilities=capabilities,
+                        capabilities=cap_strings,  # Legacy string set for RuleContext
                     )
                     rule_findings = rule.analyze_with_context(ctx)
                 else:

@@ -464,6 +464,7 @@ class ReproducibilityInfo(BaseModel):
     Hashes for reproducible analysis - enables bug reports.
     
     All inputs that affect output are hashed and exposed.
+    Cache keys must include every input that can affect outputs.
     """
     
     model_config = ConfigDict(frozen=True)
@@ -474,6 +475,64 @@ class ReproducibilityInfo(BaseModel):
     config_hash: str = Field(..., description="Hash of configuration")
     rules_hash: str = Field(..., description="Hash of ruleset versions")
     querysense_version: str = Field(..., description="QuerySense version")
+    engine_version: str = Field(default="1.0.0", description="Analyzer engine version")
+    
+    @property
+    def cache_key(self) -> str:
+        """
+        Compute canonical cache key from all components.
+        
+        Includes: plan_hash, sql_hash, config_hash, rules_hash, engine_version
+        """
+        parts = [
+            self.plan_hash,
+            self.sql_hash or "no-sql",
+            self.config_hash,
+            self.rules_hash,
+            self.engine_version,
+        ]
+        return hashlib.sha256(":".join(parts).encode()).hexdigest()[:32]
+
+
+def compute_evidence_level(
+    has_plan: bool,
+    has_sql: bool,
+    sql_confidence: "SQLConfidence",
+    has_db_probe: bool,
+    db_probe_succeeded: bool = False,
+) -> "EvidenceLevel":
+    """
+    Compute evidence level based on available data sources.
+    
+    Evidence levels are computed, not set by hand:
+    - PLAN: Plan exists (even without SQL)
+    - PLAN+SQL: Plan exists AND SQL confidence >= MEDIUM (or AST exists)
+    - PLAN+SQL+DB: DBProbe executed at least one successful validation query
+    
+    Args:
+        has_plan: Whether EXPLAIN plan is available
+        has_sql: Whether SQL query was provided
+        sql_confidence: Confidence level of SQL parsing
+        has_db_probe: Whether DB probe is configured
+        db_probe_succeeded: Whether DB probe executed at least one query
+        
+    Returns:
+        Computed EvidenceLevel
+    """
+    if not has_plan:
+        return EvidenceLevel.PLAN  # Fallback, should never happen
+    
+    # Check for Level 3: PLAN+SQL+DB
+    if has_db_probe and db_probe_succeeded:
+        if has_sql and sql_confidence in (SQLConfidence.HIGH, SQLConfidence.MEDIUM):
+            return EvidenceLevel.PLAN_SQL_DB
+    
+    # Check for Level 2: PLAN+SQL
+    if has_sql and sql_confidence in (SQLConfidence.HIGH, SQLConfidence.MEDIUM):
+        return EvidenceLevel.PLAN_SQL
+    
+    # Level 1: PLAN only
+    return EvidenceLevel.PLAN
 
 
 class AnalysisResult(BaseModel):
@@ -488,54 +547,135 @@ class AnalysisResult(BaseModel):
     - evidence_level: What data sources informed the analysis
     - reproducibility: Hashes for bug reports and cache validation
     - degraded: Whether analysis ran in degraded mode
+    
+    Invariant: All fields are non-optional and must be populated.
+    Use AnalysisResult.create() factory for construction.
     """
     
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
     
+    # Required fields - MUST be populated
     findings: tuple[Finding, ...] = Field(
-        default_factory=tuple,
+        ...,  # Required, no default
         description="All findings, sorted by severity",
     )
     
     rule_runs: tuple[RuleRun, ...] = Field(
-        default_factory=tuple,
+        ...,  # Required, no default
         description="Detailed status of each rule execution",
     )
     
-    errors: tuple[Any, ...] = Field(
-        default_factory=tuple,
-        description="Errors from rules that failed (RuleError instances)",
-    )
-    
-    metadata: ExecutionMetadata = Field(
-        default_factory=ExecutionMetadata,
-        description="Execution metadata (timing, counts)",
-    )
-    
     evidence_level: EvidenceLevel = Field(
-        default=EvidenceLevel.PLAN,
+        ...,  # Required, no default
         description="What data sources informed the analysis",
     )
     
     sql_confidence: SQLConfidence = Field(
-        default=SQLConfidence.NONE,
+        ...,  # Required, no default
         description="Confidence level in SQL parsing",
     )
     
-    reproducibility: ReproducibilityInfo | None = Field(
-        default=None,
+    reproducibility: ReproducibilityInfo = Field(
+        ...,  # Required, no default (was Optional, now mandatory)
         description="Hashes for reproducible bug reports",
     )
     
+    metadata: ExecutionMetadata = Field(
+        ...,  # Required, no default
+        description="Execution metadata (timing, counts)",
+    )
+    
     degraded: bool = Field(
-        default=False,
+        ...,  # Required, no default
         description="Whether analysis ran in degraded mode (some rules skipped/failed)",
     )
     
     degraded_reasons: tuple[str, ...] = Field(
-        default_factory=tuple,
+        ...,  # Required, no default
         description="Reasons for degraded mode",
     )
+    
+    # Optional backward-compat field
+    errors: tuple[Any, ...] = Field(
+        default_factory=tuple,
+        description="Errors from rules that failed (derived from rule_runs)",
+    )
+    
+    @classmethod
+    def create(
+        cls,
+        *,
+        findings: list[Finding],
+        rule_runs: list[RuleRun],
+        evidence_level: EvidenceLevel,
+        sql_confidence: SQLConfidence,
+        reproducibility: ReproducibilityInfo,
+        metadata: ExecutionMetadata,
+        degraded_reasons: list[str] | None = None,
+    ) -> "AnalysisResult":
+        """
+        Factory method to create an AnalysisResult with proper defaults.
+        
+        Use this instead of direct construction to ensure invariants.
+        """
+        if degraded_reasons is None:
+            degraded_reasons = []
+        
+        # Compute degraded flag
+        failed = [r for r in rule_runs if r.status == RuleRunStatus.FAIL]
+        skipped = [r for r in rule_runs if r.status == RuleRunStatus.SKIP]
+        
+        degraded = bool(failed or skipped or degraded_reasons)
+        
+        # Add automatic degraded reasons
+        all_reasons = list(degraded_reasons)
+        if failed:
+            all_reasons.append(f"{len(failed)} rules failed")
+        if skipped:
+            all_reasons.append(f"{len(skipped)} rules skipped (missing capabilities)")
+        
+        # Build errors tuple from failed rule runs
+        errors = tuple(r.error_summary for r in failed if r.error_summary)
+        
+        return cls(
+            findings=tuple(sorted(findings, key=lambda f: (f.severity, f.rule_id))),
+            rule_runs=tuple(rule_runs),
+            evidence_level=evidence_level,
+            sql_confidence=sql_confidence,
+            reproducibility=reproducibility,
+            metadata=metadata,
+            degraded=degraded,
+            degraded_reasons=tuple(all_reasons),
+            errors=errors,
+        )
+    
+    @classmethod
+    def empty(cls, analysis_id: str = "test") -> "AnalysisResult":
+        """
+        Create an empty AnalysisResult for testing.
+        
+        This is provided for backward compatibility with tests that
+        expect to be able to create AnalysisResult() with no args.
+        Production code should use the create() factory.
+        """
+        return cls(
+            findings=(),
+            rule_runs=(),
+            evidence_level=EvidenceLevel.PLAN,
+            sql_confidence=SQLConfidence.NONE,
+            reproducibility=ReproducibilityInfo(
+                analysis_id=analysis_id,
+                plan_hash="test",
+                sql_hash=None,
+                config_hash="test",
+                rules_hash="test",
+                querysense_version="0.5.2",
+            ),
+            metadata=ExecutionMetadata(),
+            degraded=False,
+            degraded_reasons=(),
+            errors=(),
+        )
     
     # Convenience properties that delegate to metadata
     @property

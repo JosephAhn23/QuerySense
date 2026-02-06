@@ -1,6 +1,6 @@
 [project]
 name = "querysense"
-version = "0.5.1"
+version = "0.5.2"
 description = "PostgreSQL query performance analyzer. Detects slow queries, suggests indexes, works offline."
 readme = "README.md"
 requires-python = ">=3.11"

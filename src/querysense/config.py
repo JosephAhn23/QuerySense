@@ -119,7 +119,7 @@ class Config(BaseModel):
     
     # Global settings
     querysense_version: str = Field(
-        default="0.5.1",
+        default="0.5.2",
         description="QuerySense version for cache invalidation",
     )
     

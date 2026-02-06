@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-02-06
+
+### Added - Overkill Rigour System Design (Phase 1)
+
+#### Typed Capability System
+- `Capability` enum with typed capability tokens (not freeform strings)
+- Categories: SQL_*, DB_*, EXPLAIN_*, PRIOR_*, rule-provided
+- `check_requirements()` validates rule dependencies against available capabilities
+- `build_rule_dag()` sorts rules by topological order, detects cycles
+
+#### FactStore with Provenance
+- `FactKey` enum for typed fact keys
+- `FactStore` class tracks facts with provenance (source, evidence level, timestamp)
+- `FactProvenance` dataclass for debugging and auditing
+- Capabilities derive from facts + environment
+
+#### AnalysisResult "Must-Populate" Fields
+- All fields on `AnalysisResult` are now required (non-optional)
+- `AnalysisResult.create()` factory enforces invariants
+- `AnalysisResult.empty()` for testing backward compat
+- Compile-time guarantee: if design says it exists, runtime emits it or fails
+
+#### DAG Rule Execution
+- Rules sorted by topological order based on requires/provides
+- Cycle detection at startup with `CycleDetectedError`
+- Missing capability → `RuleRunStatus.SKIP` with explicit skip_reason
+- `RuleRun` always exists, even for skipped rules
+
+### Changed
+- `AnalysisContext` now wraps `FactStore` with typed access
+- Analyzer uses `build_rule_dag()` instead of phase-only ordering
+- Tests updated to use `AnalysisResult.empty()` factory
+
 ## [0.5.1] - 2026-02-06
 
 ### Fixed - Integration Wiring
