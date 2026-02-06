@@ -1,0 +1,117 @@
+{
+  "full_table_scan": [
+    {
+      "id": 1,
+      "select_type": "SIMPLE",
+      "table": "orders",
+      "partitions": null,
+      "type": "ALL",
+      "possible_keys": null,
+      "key": null,
+      "key_len": null,
+      "ref": null,
+      "rows": 250000,
+      "filtered": 10.0,
+      "Extra": "Using where"
+    }
+  ],
+  
+  "missing_index": [
+    {
+      "id": 1,
+      "select_type": "SIMPLE",
+      "table": "users",
+      "partitions": null,
+      "type": "ALL",
+      "possible_keys": "idx_email,idx_status",
+      "key": null,
+      "key_len": null,
+      "ref": null,
+      "rows": 100000,
+      "filtered": 10.0,
+      "Extra": "Using where"
+    }
+  ],
+  
+  "using_filesort": [
+    {
+      "id": 1,
+      "select_type": "SIMPLE",
+      "table": "products",
+      "partitions": null,
+      "type": "ALL",
+      "possible_keys": null,
+      "key": null,
+      "key_len": null,
+      "ref": null,
+      "rows": 50000,
+      "filtered": 100.0,
+      "Extra": "Using filesort"
+    }
+  ],
+  
+  "using_temporary": [
+    {
+      "id": 1,
+      "select_type": "SIMPLE",
+      "table": "sales",
+      "partitions": null,
+      "type": "ALL",
+      "possible_keys": null,
+      "key": null,
+      "key_len": null,
+      "ref": null,
+      "rows": 75000,
+      "filtered": 100.0,
+      "Extra": "Using temporary; Using filesort"
+    }
+  ],
+  
+  "good_query": [
+    {
+      "id": 1,
+      "select_type": "SIMPLE",
+      "table": "users",
+      "partitions": null,
+      "type": "ref",
+      "possible_keys": "idx_email",
+      "key": "idx_email",
+      "key_len": 767,
+      "ref": "const",
+      "rows": 1,
+      "filtered": 100.0,
+      "Extra": "Using index condition"
+    }
+  ],
+  
+  "join_with_bad_access": [
+    {
+      "id": 1,
+      "select_type": "SIMPLE",
+      "table": "orders",
+      "partitions": null,
+      "type": "ALL",
+      "possible_keys": null,
+      "key": null,
+      "key_len": null,
+      "ref": null,
+      "rows": 50000,
+      "filtered": 100.0,
+      "Extra": "Using where"
+    },
+    {
+      "id": 1,
+      "select_type": "SIMPLE",
+      "table": "order_items",
+      "partitions": null,
+      "type": "ALL",
+      "possible_keys": "idx_order_id",
+      "key": null,
+      "key_len": null,
+      "ref": null,
+      "rows": 200000,
+      "filtered": 10.0,
+      "Extra": "Using where; Using join buffer (hash join)"
+    }
+  ]
+}
