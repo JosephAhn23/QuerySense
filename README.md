@@ -5,8 +5,8 @@ Analyze PostgreSQL EXPLAIN plans and get actionable performance fixes.
 ```bash
 pip install querysense
 
+<img width="2816" height="1536" alt="query" src="https://github.com/user-attachments/assets/b5072775-31b3-4d34-8217-b4d0f906cc56" />
 
-![QuerySense: 2.3s → 0.04s with one index](query.png)
 
 ```bash
 $ querysense analyze slow_query.json
