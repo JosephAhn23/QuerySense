@@ -2,6 +2,9 @@
 
 Analyze PostgreSQL EXPLAIN plans and get actionable performance fixes.
 
+```bash
+pip install querysense
+
 ![QuerySense: 2.3s → 0.04s with one index](query.png)
 
 ```bash
