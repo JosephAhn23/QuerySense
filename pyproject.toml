@@ -1,12 +1,12 @@
 [project]
 name = "querysense"
-version = "0.1.0"
-description = "AI-powered PostgreSQL query performance analyzer"
+version = "0.3.0"
+description = "Database query performance analyzer for PostgreSQL and MySQL"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Your Name", email = "you@example.com" }]
-keywords = ["postgresql", "query-optimization", "database", "performance", "ai"]
+keywords = ["postgresql", "mysql", "query-optimization", "database", "performance", "explain"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
