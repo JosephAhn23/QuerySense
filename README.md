@@ -1,8 +1,24 @@
 # QuerySense
 
+[![PyPI version](https://badge.fury.io/py/querysense.svg)](https://badge.fury.io/py/querysense)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Typed](https://img.shields.io/badge/typed-yes-green.svg)](https://www.python.org/dev/peps/pep-0561/)
+
 Analyze PostgreSQL EXPLAIN plans and get actionable performance fixes.
 
 ![QuerySense: 2.3s → 0.04s with one index](query.png)
+
+## Project Status
+
+| Aspect | Status |
+|--------|--------|
+| **Version** | 0.4.0 (Beta) |
+| **Stability** | [See STABILITY.md](STABILITY.md) |
+| **Security** | [See SECURITY.md](SECURITY.md) |
+| **Changelog** | [See CHANGELOG.md](CHANGELOG.md) |
+
+> **Note**: QuerySense is in active development (0.x). The API may change between minor versions. Pin to `querysense>=0.4.0,<0.5.0` for stability.
 
 ```bash
 $ querysense analyze slow_query.json
@@ -122,16 +138,75 @@ Stress-tested on 250,000 query plans:
 - **Focused** - 11 rules that catch real problems
 - **Honest** - Only flags issues we're confident about
 
+## Advanced Usage
+
+### Python API
+
+```python
+from querysense import parse_explain, Analyzer
+
+# Parse EXPLAIN JSON
+explain = parse_explain("plan.json")
+
+# Analyze with caching (new in 0.4.0)
+analyzer = Analyzer(cache_enabled=True)
+result = analyzer.analyze(explain)
+
+for finding in result.findings:
+    print(f"{finding.severity}: {finding.title}")
+    if finding.suggestion:
+        print(f"  Fix: {finding.suggestion}")
+```
+
+### Async Support (New in 0.4.0)
+
+```python
+# For web servers, APIs, async applications
+result = await analyzer.analyze_async(explain)
+```
+
+### Thread Safety
+
+QuerySense 0.4.0+ is fully thread-safe. You can share a single `Analyzer` instance across multiple threads:
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+analyzer = Analyzer()  # Safe to share
+
+with ThreadPoolExecutor() as executor:
+    results = executor.map(analyzer.analyze, explains)
+```
+
+### Observability
+
+```python
+# Access built-in metrics
+print(f"Cache hit rate: {analyzer.metrics.cache_hit_rate:.1%}")
+print(f"Avg duration: {analyzer.metrics.avg_duration_ms:.1f}ms")
+
+# Enable tracing for debugging
+analyzer = Analyzer(tracing_enabled=True)
+```
+
 ## Contributing
 
 Have a slow query? Open an issue with the EXPLAIN JSON. 
 
 If it's a common pattern, we'll add a rule.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
+
+## Security
+
+Found a vulnerability? **Do not open a public issue.**
+
+See [SECURITY.md](SECURITY.md) for our security policy and how to report issues.
+
 ## License
 
-MIT
+MIT - See [LICENSE](LICENSE) for details.
 
 ---
 
-*v0.3.0 - 11 PostgreSQL rules, 652 plans/sec*
+*v0.4.0 - Thread-safe, async support, 11 PostgreSQL rules, 652 plans/sec*

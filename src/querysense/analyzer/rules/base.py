@@ -10,12 +10,16 @@ Rules support two analysis signatures:
 
 If a rule implements analyze_with_context(), it will be called with the full
 RuleContext. Otherwise, analyze() is called with just explain and prior_findings.
+
+SQL Enhancement Protocol:
+Rules can optionally implement enhance_with_sql() to provide better suggestions
+when SQL query is available. This decouples rules from the analyzer.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,7 +27,52 @@ from querysense.analyzer.models import Finding, NodeContext, RulePhase, Severity
 from querysense.analyzer.path import NodePath, traverse_with_path
 
 if TYPE_CHECKING:
+    from querysense.analyzer.sql_parser import QueryInfo
     from querysense.parser.models import ExplainOutput, PlanNode
+
+
+@runtime_checkable
+class SQLEnhanceable(Protocol):
+    """
+    Protocol for rules that can enhance findings with SQL information.
+    
+    Rules implementing this protocol can provide better suggestions
+    when the original SQL query is available.
+    
+    Example:
+        class SeqScanLargeTable(Rule, SQLEnhanceable):
+            def enhance_with_sql(
+                self,
+                finding: Finding,
+                query_info: QueryInfo,
+            ) -> Finding:
+                # Get recommended columns from SQL analysis
+                table = finding.context.relation_name
+                if table:
+                    columns = query_info.suggest_composite_index(table)
+                    if columns:
+                        return finding.model_copy(update={
+                            "suggestion": f"CREATE INDEX ON {table}({', '.join(columns)})"
+                        })
+                return finding
+    """
+    
+    def enhance_with_sql(
+        self,
+        finding: "Finding",
+        query_info: "QueryInfo",
+    ) -> "Finding":
+        """
+        Enhance a finding with SQL-based recommendations.
+        
+        Args:
+            finding: The original finding from this rule
+            query_info: Parsed information about the SQL query
+            
+        Returns:
+            Enhanced finding with better suggestions, or original if no enhancement
+        """
+        ...
 
 
 class RuleConfig(BaseModel):
