@@ -95,16 +95,19 @@ runs:
       run: |
         echo "::group::QuerySense Analysis"
 
-        ARGS="\"${{ inputs.plan-pattern }}\" --fail-on ${{ inputs.fail-on }}"
-        ARGS="$ARGS --baseline ${{ inputs.baseline-file }}"
-
+        FORMAT_ARGS=""
         if [ "${{ inputs.format }}" = "github" ]; then
-          ARGS="$ARGS --format json --output /tmp/qs_results.json"
+          FORMAT_ARGS="--format json --output /tmp/qs_results.json"
         else
-          ARGS="$ARGS --format ${{ inputs.format }}"
+          FORMAT_ARGS="--format ${{ inputs.format }}"
         fi
 
-        querysense ci analyze $ARGS --allow-plain || EXIT_CODE=$?
+        querysense ci analyze \
+          "${{ inputs.plan-pattern }}" \
+          --fail-on "${{ inputs.fail-on }}" \
+          --baseline "${{ inputs.baseline-file }}" \
+          $FORMAT_ARGS \
+          --allow-plain || EXIT_CODE=$?
 
         # Parse results for outputs
         if [ -f /tmp/qs_results.json ]; then
@@ -115,22 +118,6 @@ runs:
           echo "findings-count=$FINDINGS" >> $GITHUB_OUTPUT
           echo "critical-count=$CRITICAL" >> $GITHUB_OUTPUT
           echo "regression-count=$REGRESSIONS" >> $GITHUB_OUTPUT
-
-          # Generate GitHub annotations
-          python -c "
-import json, sys
-d = json.load(open('/tmp/qs_results.json'))
-for f in d.get('findings', []):
-    sev = f.get('severity', 'info')
-    level = 'error' if sev == 'critical' else ('warning' if sev == 'warning' else 'notice')
-    title = f.get('title', 'QuerySense Finding')
-    msg = f.get('description', '')[:200]
-    file_path = f.get('file', '')
-    if file_path:
-        print(f'::{level} file={file_path}::{title}: {msg}')
-    else:
-        print(f'::{level}::{title}: {msg}')
-" || true
 
           # Write step summary
           echo "## QuerySense Analysis Results" >> $GITHUB_STEP_SUMMARY
@@ -153,6 +140,37 @@ for f in d.get('findings', []):
 
         echo "::endgroup::"
         exit ${EXIT_CODE:-0}
+
+    - name: Annotate findings
+      if: always() && steps.analyze.outcome != 'skipped'
+      shell: python
+      run: |
+        import json, os, sys
+
+        results_file = "/tmp/qs_results.json"
+        if not os.path.exists(results_file):
+            sys.exit(0)
+
+        with open(results_file) as fh:
+            d = json.load(fh)
+
+        for f in d.get("findings", []):
+            sev = f.get("severity", "info")
+            if sev == "critical":
+                level = "error"
+            elif sev == "warning":
+                level = "warning"
+            else:
+                level = "notice"
+
+            title = f.get("title", "QuerySense Finding")
+            msg = f.get("description", "")[:200]
+            file_path = f.get("file", "")
+
+            if file_path:
+                print(f"::{level} file={file_path}::{title}: {msg}")
+            else:
+                print(f"::{level}::{title}: {msg}")
 
     - name: Compliance check
       if: inputs.compliance-check == 'true'
