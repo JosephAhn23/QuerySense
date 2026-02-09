@@ -61,10 +61,21 @@ dev = [
     "coverage>=7.4.0,<8.0.0",
     "pip-audit>=2.6.0,<3.0.0",
     "pglast>=6.0,<7.0",
+    "import-linter>=2.0,<3.0",
 ]
 db = [
     "asyncpg>=0.29.0,<1.0.0",
     "psycopg[binary]>=3.1.0,<4.0.0",
+]
+cloud = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy[asyncio]>=2.0.25",
+    "aiosqlite>=0.20.0",
+    "python-multipart>=0.0.9",
+    "itsdangerous>=2.1.0",
+    "bcrypt>=4.0.0",
+    "jinja2>=3.1.0",
 ]
 # For CI matrix testing against dependency boundaries
 test-oldest = [
@@ -163,5 +174,105 @@ exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
+]
+
+# =============================================================================
+# Import Linter – enforce module boundaries after consolidation
+# =============================================================================
+# Run: python -m importlinter --config pyproject.toml
+# These contracts prevent the codebase from drifting back into
+# duplicated subsystems.  Each contract encodes one architectural rule.
+
+[tool.importlinter]
+root_packages = ["querysense"]
+
+# ---- Contract 1: Dependency Rule (Clean Architecture) ----
+# The core domain models must not depend on infrastructure (DB, CLI, Cloud).
+[[tool.importlinter.contracts]]
+name = "Models are independent of infrastructure"
+type = "forbidden"
+source_modules = [
+    "querysense.analyzer.models",
+    "querysense.analyzer.capabilities",
+]
+forbidden_modules = [
+    "querysense.cli",
+    "querysense.db",
+    "querysense.cloud",
+    "querysense.output",
+]
+
+# ---- Contract 2: Rules depend on base, not on analyzer orchestrator ----
+# Individual rule modules must not import the Analyzer class directly.
+# They receive data through the Rule protocol, not by pulling from the
+# orchestrator.  This keeps rules testable in isolation.
+[[tool.importlinter.contracts]]
+name = "Rules do not import the Analyzer orchestrator"
+type = "forbidden"
+source_modules = [
+    "querysense.analyzer.rules",
+]
+forbidden_modules = [
+    "querysense.analyzer.analyzer",
+]
+
+# ---- Contract 3: CLI / Cloud are thin adapters ----
+# Delivery mechanisms must not reach into rule internals.
+# They should go through the public querysense API or AnalysisService.
+# The analyzer __init__ imports rule modules for registration (side effect);
+# that transitive path is explicitly allowed.
+[[tool.importlinter.contracts]]
+name = "CLI does not import rule internals"
+type = "forbidden"
+source_modules = [
+    "querysense.cli",
+]
+forbidden_modules = [
+    "querysense.analyzer.rules.bad_row_estimate",
+    "querysense.analyzer.rules.seq_scan_large_table",
+    "querysense.analyzer.rules.spilling_to_disk",
+    "querysense.analyzer.rules.nested_loop_large_table",
+]
+ignore_imports = [
+    "querysense.analyzer -> querysense.analyzer.rules.bad_row_estimate",
+    "querysense.analyzer -> querysense.analyzer.rules.seq_scan_large_table",
+    "querysense.analyzer -> querysense.analyzer.rules.spilling_to_disk",
+    "querysense.analyzer -> querysense.analyzer.rules.nested_loop_large_table",
+]
+
+# ---- Contract 4: SQL parser port ----
+# Only sql_ast.py (the port) may import from sql_parser.py (the adapter).
+# All other modules should import SQL types from sql_ast.
+# The sql_ast -> sql_parser edge is the intentional port-wraps-adapter
+# import and is excluded from enforcement.
+[[tool.importlinter.contracts]]
+name = "SQL parser adapter is accessed only through the port"
+type = "forbidden"
+source_modules = [
+    "querysense.analyzer.analyzer",
+    "querysense.analyzer.context",
+    "querysense.analyzer.rules",
+]
+forbidden_modules = [
+    "querysense.analyzer.sql_parser",
+]
+ignore_type_checking_imports = true
+ignore_imports = [
+    "querysense.analyzer.sql_ast -> querysense.analyzer.sql_parser",
+]
+
+# ---- Contract 5: DAG is the single authority for rule ordering ----
+# No module besides dag.py should implement topological sorting or
+# cycle detection.  capabilities.py re-exports from dag for compat only.
+[[tool.importlinter.contracts]]
+name = "Layered architecture: analyzer layers"
+type = "layers"
+layers = [
+    "querysense.cli",
+    "querysense.engine",
+    "querysense.analyzer.analyzer",
+    "querysense.analyzer.dag",
+    "querysense.analyzer.capabilities",
+    "querysense.analyzer.models",
 ]
 

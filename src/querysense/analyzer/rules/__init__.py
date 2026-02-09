@@ -8,6 +8,7 @@ from querysense.analyzer.rules.foreign_key_index import ForeignKeyWithoutIndex
 from querysense.analyzer.rules.missing_buffers import MissingBuffers
 from querysense.analyzer.rules.nested_loop_large_table import NestedLoopLargeTable
 from querysense.analyzer.rules.parallel_query_not_used import ParallelQueryNotUsed
+from querysense.analyzer.rules.partition_pruning import PartitionPruningFailure
 from querysense.analyzer.rules.seq_scan_large_table import SeqScanLargeTable
 from querysense.analyzer.rules.spilling_to_disk import SpillingToDisk
 from querysense.analyzer.rules.stale_statistics import StaleStatistics
@@ -25,6 +26,7 @@ __all__ = [
     "MissingBuffers",
     "NestedLoopLargeTable",
     "ParallelQueryNotUsed",
+    "PartitionPruningFailure",
     "SeqScanLargeTable",
     "SpillingToDisk",
     "StaleStatistics",

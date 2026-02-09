@@ -1,13 +1,13 @@
 """
-AnalysisContext - typed fact store with provenance tracking.
+AnalysisContext - high-level analysis context built on the unified FactStore.
 
-This replaces soft context bags with a strict fact registry where every
-fact has explicit provenance (source, evidence level, timestamp).
+Provides a convenient interface for the analyzer by wrapping FactStore
+with domain-specific helpers (evidence level computation, DB probe
+integration, budget tracking).
 
-Design Principles:
-- Stop passing implicit state; store explicit facts with provenance
-- Capabilities derive from facts present + environment
-- Every fact write includes source rule, evidence level, timestamp
+This module re-exports FactKey and FactStore from capabilities.py
+for backward compatibility. All fact keys are defined in capabilities.py
+as the single source of truth.
 
 Example:
     ctx = AnalysisContext()
@@ -17,86 +17,43 @@ Example:
         source="db_probe",
         evidence=EvidenceLevel.PLAN_SQL_DB,
     )
-    
+
     if ctx.has_fact(FactKey.TABLE_STATS):
         stats = ctx.get_fact(FactKey.TABLE_STATS)
 """
 
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
-from querysense.analyzer.capabilities import Capability
+from querysense.analyzer.capabilities import (
+    Capability,
+    FactKey,
+    FactProvenance,
+    FactStore,
+)
 from querysense.analyzer.models import EvidenceLevel, SQLConfidence
 
 if TYPE_CHECKING:
-    from querysense.analyzer.sql_parser import QueryInfo
+    from querysense.analyzer.sql_ast import QueryInfo
     from querysense.db.probe import DBProbe
     from querysense.parser.models import ExplainOutput
 
+_T = TypeVar("_T")
 
-class FactKey(str, Enum):
-    """
-    Typed keys for facts in the analysis context.
-    
-    Each fact key corresponds to a specific type of data that can
-    be stored and retrieved during analysis.
-    """
-    
-    # Core inputs
-    EXPLAIN_OUTPUT = "explain_output"       # The EXPLAIN JSON
-    SQL_TEXT = "sql_text"                   # Raw SQL query text
-    SQL_PARSE_RESULT = "sql_parse_result"   # SQLParseResult from parser
-    
-    # SQL-derived facts
-    SQL_TABLES = "sql_tables"               # List of table names
-    SQL_PREDICATES = "sql_predicates"       # WHERE/JOIN predicates
-    SQL_COLUMNS = "sql_columns"             # Column references
-    SQL_JOINS = "sql_joins"                 # Join specifications
-    SQL_HASH = "sql_hash"                   # Normalized SQL hash
-    
-    # DB-derived facts
-    DB_CONNECTED = "db_connected"           # Boolean: DB available
-    TABLE_STATS = "table_stats"             # Dict[table, TableStats]
-    TABLE_INDEXES = "table_indexes"         # Dict[table, List[IndexInfo]]
-    DB_SETTINGS = "db_settings"             # DBSettings object
-    PG_STAT_STATEMENTS = "pg_stat_statements"  # Query stats if available
-    
-    # Analysis-derived facts
-    PRIOR_FINDINGS = "prior_findings"       # Findings from earlier rules
-    SLOW_NODES = "slow_nodes"               # Nodes exceeding time threshold
-    SEQ_SCAN_NODES = "seq_scan_nodes"       # Seq scan nodes
-    MISSING_INDEXES = "missing_indexes"     # Suggested indexes
-    
-    # Config
-    CONFIG = "config"                       # Analysis configuration
-
-
-@dataclass(frozen=True)
-class FactEntry:
-    """
-    A fact with provenance metadata.
-    
-    Tracks where the fact came from and its reliability.
-    """
-    
-    key: FactKey
-    value: Any
-    source: str                              # Rule ID or "analyzer" or "db_probe"
-    evidence: EvidenceLevel                  # What level of evidence backs this
-    timestamp: float = field(default_factory=time.time)
-    db_query: str | None = None              # SQL used to fetch (if DB-derived)
-    
-    def __repr__(self) -> str:
-        return f"Fact({self.key.value}, source={self.source}, evidence={self.evidence.value})"
+# Re-export for backward compatibility
+__all__ = [
+    "AnalysisContext",
+    "FactKey",
+    "FactStore",
+    "FactNotFoundError",
+    "FactTypeMismatchError",
+]
 
 
 class FactNotFoundError(Exception):
     """Requested fact is not present in context."""
-    
+
     def __init__(self, key: FactKey) -> None:
         self.key = key
         super().__init__(f"Fact not found: {key.value}")
@@ -104,7 +61,7 @@ class FactNotFoundError(Exception):
 
 class FactTypeMismatchError(Exception):
     """Fact exists but has unexpected type."""
-    
+
     def __init__(self, key: FactKey, expected: type, actual: type) -> None:
         self.key = key
         self.expected = expected
@@ -116,17 +73,18 @@ class FactTypeMismatchError(Exception):
 
 class AnalysisContext:
     """
-    Typed fact store for analysis state.
-    
+    High-level analysis context wrapping the unified FactStore.
+
     Provides:
-    - Explicit fact storage with provenance
+    - Domain-specific fact storage with EvidenceLevel tracking
     - Capability derivation from facts
     - Type-safe fact retrieval
-    
+    - DB probe integration with budget tracking
+
     Thread Safety:
         This class is NOT thread-safe. Create one context per analysis.
     """
-    
+
     def __init__(
         self,
         explain: "ExplainOutput | None" = None,
@@ -135,18 +93,17 @@ class AnalysisContext:
     ) -> None:
         """
         Initialize analysis context.
-        
+
         Args:
             explain: The EXPLAIN output being analyzed
             sql: Optional SQL query text
             db_probe: Optional database probe for live queries
         """
-        self._facts: dict[FactKey, FactEntry] = {}
-        self._capabilities: set[Capability] = set()
+        self._store = FactStore()
         self._db_probe = db_probe
         self._db_queries_run = 0
         self._db_time_ms = 0.0
-        
+
         # Set core facts if provided
         if explain is not None:
             self.set_fact(
@@ -155,8 +112,7 @@ class AnalysisContext:
                 source="analyzer",
                 evidence=EvidenceLevel.PLAN,
             )
-            self._capabilities.add(Capability.EXPLAIN_PLAN)
-        
+
         if sql is not None:
             self.set_fact(
                 FactKey.SQL_TEXT,
@@ -164,11 +120,15 @@ class AnalysisContext:
                 source="analyzer",
                 evidence=EvidenceLevel.PLAN,
             )
-            self._capabilities.add(Capability.SQL_TEXT)
-        
+
         if db_probe is not None:
-            self._capabilities.add(Capability.DB_CONNECTED)
-    
+            self._store.add_capability(Capability.DB_CONNECTED)
+
+    @property
+    def fact_store(self) -> FactStore:
+        """Access the underlying FactStore directly."""
+        return self._store
+
     def set_fact(
         self,
         key: FactKey,
@@ -179,7 +139,7 @@ class AnalysisContext:
     ) -> None:
         """
         Store a fact with provenance.
-        
+
         Args:
             key: The fact key
             value: The fact value
@@ -187,65 +147,41 @@ class AnalysisContext:
             evidence: Evidence level backing this fact
             db_query: SQL query used to fetch (for DB-derived facts)
         """
-        self._facts[key] = FactEntry(
-            key=key,
-            value=value,
-            source=source,
-            evidence=evidence,
+        self._store.set(
+            key,
+            value,
+            source_rule=source,
+            evidence_level=evidence.value,
             db_query=db_query,
         )
-        
-        # Update capabilities based on fact
-        self._update_capabilities_for_fact(key)
-    
-    def _update_capabilities_for_fact(self, key: FactKey) -> None:
-        """Update capabilities when a fact is added."""
-        capability_map: dict[FactKey, list[Capability]] = {
-            FactKey.SQL_PARSE_RESULT: [Capability.SQL_AST],
-            FactKey.SQL_TABLES: [Capability.SQL_TABLES],
-            FactKey.SQL_PREDICATES: [Capability.SQL_PREDICATES],
-            FactKey.SQL_COLUMNS: [Capability.SQL_COLUMNS],
-            FactKey.SQL_JOINS: [Capability.SQL_JOINS],
-            FactKey.TABLE_STATS: [Capability.DB_STATS],
-            FactKey.TABLE_INDEXES: [Capability.DB_INDEXES],
-            FactKey.DB_SETTINGS: [Capability.DB_SETTINGS],
-            FactKey.PG_STAT_STATEMENTS: [Capability.DB_PG_STAT],
-            FactKey.PRIOR_FINDINGS: [Capability.PRIOR_FINDINGS],
-        }
-        
-        if key in capability_map:
-            for cap in capability_map[key]:
-                self._capabilities.add(cap)
-    
+
     def has_fact(self, key: FactKey) -> bool:
         """Check if a fact exists."""
-        return key in self._facts
-    
+        return self._store.has(key)
+
     def get_fact(self, key: FactKey) -> Any:
         """
         Get a fact value.
-        
+
         Raises:
             FactNotFoundError: If fact doesn't exist
         """
-        if key not in self._facts:
+        if not self._store.has(key):
             raise FactNotFoundError(key)
-        return self._facts[key].value
-    
+        return self._store.get(key)
+
     def get_fact_or_none(self, key: FactKey) -> Any | None:
         """Get a fact value or None if not present."""
-        if key not in self._facts:
-            return None
-        return self._facts[key].value
-    
-    def get_fact_entry(self, key: FactKey) -> FactEntry | None:
+        return self._store.get(key)
+
+    def get_fact_entry(self, key: FactKey) -> Any | None:
         """Get full fact entry with provenance."""
-        return self._facts.get(key)
-    
-    def get_fact_typed(self, key: FactKey, expected_type: type) -> Any:
+        return self._store.get_fact(key)
+
+    def get_fact_typed(self, key: FactKey, expected_type: type[_T]) -> _T:
         """
         Get a fact with type checking.
-        
+
         Raises:
             FactNotFoundError: If fact doesn't exist
             FactTypeMismatchError: If fact has wrong type
@@ -254,44 +190,44 @@ class AnalysisContext:
         if not isinstance(value, expected_type):
             raise FactTypeMismatchError(key, expected_type, type(value))
         return value
-    
+
     @property
     def capabilities(self) -> frozenset[Capability]:
         """Get immutable set of available capabilities."""
-        return frozenset(self._capabilities)
-    
+        return self._store.capabilities
+
     def has_capability(self, cap: Capability) -> bool:
         """Check if a capability is available."""
-        return cap in self._capabilities
-    
+        return self._store.has_capability(cap)
+
     def add_capability(self, cap: Capability) -> None:
         """Manually add a capability (e.g., from environment)."""
-        self._capabilities.add(cap)
-    
+        self._store.add_capability(cap)
+
     @property
     def db_probe(self) -> "DBProbe | None":
         """Get the database probe if available."""
         return self._db_probe
-    
+
     @property
     def db_queries_run(self) -> int:
         """Number of DB queries executed during analysis."""
         return self._db_queries_run
-    
+
     @property
     def db_time_ms(self) -> float:
         """Total time spent on DB queries."""
         return self._db_time_ms
-    
+
     def record_db_query(self, duration_ms: float) -> None:
         """Record a DB query execution for budgeting."""
         self._db_queries_run += 1
         self._db_time_ms += duration_ms
-    
+
     def compute_evidence_level(self, sql_confidence: SQLConfidence) -> EvidenceLevel:
         """
         Compute the evidence level based on available facts.
-        
+
         Evidence Level is computed, not set by hand:
         - PLAN: Have EXPLAIN output
         - PLAN+SQL: Have EXPLAIN + SQL with confidence >= MEDIUM
@@ -304,31 +240,21 @@ class AnalysisContext:
             self.has_fact(FactKey.TABLE_INDEXES),
             self.has_fact(FactKey.DB_SETTINGS),
         ])
-        
+
         if has_plan and has_sql and has_db:
             return EvidenceLevel.PLAN_SQL_DB
         elif has_plan and has_sql:
             return EvidenceLevel.PLAN_SQL
         else:
             return EvidenceLevel.PLAN
-    
-    def all_facts(self) -> dict[FactKey, FactEntry]:
+
+    def all_facts(self) -> dict[str, Any]:
         """Get all facts with their provenance (for debugging)."""
-        return dict(self._facts)
-    
+        return self._store.to_dict()
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize context state for debugging."""
-        return {
-            "facts": [
-                {
-                    "key": entry.key.value,
-                    "source": entry.source,
-                    "evidence": entry.evidence.value,
-                    "timestamp": entry.timestamp,
-                }
-                for entry in self._facts.values()
-            ],
-            "capabilities": sorted(cap.value for cap in self._capabilities),
-            "db_queries_run": self._db_queries_run,
-            "db_time_ms": self._db_time_ms,
-        }
+        result = self._store.to_dict()
+        result["db_queries_run"] = self._db_queries_run
+        result["db_time_ms"] = self._db_time_ms
+        return result

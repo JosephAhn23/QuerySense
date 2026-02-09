@@ -1,5 +1,9 @@
 """
-SQL AST Parser using pglast (PostgreSQL's actual parser).
+SQL parsing port -- the single public entry point for SQL analysis.
+
+This module is the authoritative SQL parsing interface for QuerySense.
+All consumers should import SQL parsing types and functions from here,
+not from the internal ``sql_parser`` adapter.
 
 Provides accurate SQL parsing for:
 - CTEs (WITH clauses)
@@ -8,10 +12,9 @@ Provides accurate SQL parsing for:
 - Lateral joins
 - PostgreSQL-specific syntax
 
-Falls back to sqlparse (heuristic tokenizer) when pglast is unavailable.
-
-Design principle: "Use the source of truth"
-If you want Postgres semantics, use the Postgres parser.
+Prefers pglast (PostgreSQL's actual C parser) when installed, and falls
+back to sqlparse (heuristic tokenizer) transparently.  Confidence level
+is captured in ``SQLParseResult`` so callers can gate advice.
 
 Usage:
     from querysense.analyzer.sql_ast import SQLASTParser, SQLParseResult
@@ -26,6 +29,9 @@ Usage:
     else:
         # Heuristic or failed - disable index advice or mark as heuristic
         ...
+
+Re-exported from internal adapter (sql_parser.py):
+    ColumnInfo, ColumnUsage, QueryInfo, SQLQueryAnalyzer
 """
 
 from __future__ import annotations
@@ -37,12 +43,30 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from querysense.analyzer.models import SQLConfidence
-from querysense.analyzer.sql_parser import (
+
+# Re-export shared data models from the internal sqlparse adapter so that
+# consumers only need ``from querysense.analyzer.sql_ast import ...``.
+from querysense.analyzer.sql_parser import (  # noqa: F401
     ColumnInfo,
     ColumnUsage,
     QueryInfo,
     SQLQueryAnalyzer,
 )
+
+__all__ = [
+    # Core parser facade
+    "SQLASTParser",
+    "SQLParseResult",
+    "PglastParser",
+    # Factory / introspection
+    "get_sql_parser",
+    "is_pglast_available",
+    # Re-exported data models (canonical import location)
+    "ColumnInfo",
+    "ColumnUsage",
+    "QueryInfo",
+    "SQLQueryAnalyzer",
+]
 
 logger = logging.getLogger(__name__)
 

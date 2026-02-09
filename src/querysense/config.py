@@ -429,7 +429,7 @@ def load_config_from_file(path: Path) -> Config:
                 data = json.load(f)
         
         return Config(**data)
-    except Exception as e:
+    except (json.JSONDecodeError, OSError, TypeError, ValueError) as e:
         logger.error("Failed to load config from %s: %s", path, e)
         return load_config_from_env()
 

@@ -29,6 +29,8 @@ from querysense.output.renderers import (
     render_json,
     render_markdown,
     render_text,
+    render_upgrade_markdown,
+    render_upgrade_text,
 )
 from querysense.output.schema import (
     AnalysisResultSchema,
@@ -42,6 +44,8 @@ __all__ = [
     "render_text",
     "render_json",
     "render_markdown",
+    "render_upgrade_text",
+    "render_upgrade_markdown",
     "AnalysisResultSchema",
     "FindingSchema",
     "get_json_schema",

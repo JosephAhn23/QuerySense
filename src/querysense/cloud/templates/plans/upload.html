@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Upload Plan - QuerySense Cloud{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-gray-900">Upload EXPLAIN Plan</h1>
+        <p class="mt-1 text-sm text-gray-500">
+            Paste your <code class="bg-gray-100 px-1 py-0.5 rounded text-xs">EXPLAIN (ANALYZE, FORMAT JSON)</code> output to get actionable performance findings.
+        </p>
+    </div>
+
+    {% if error %}
+    <div class="mb-4 rounded-md bg-red-50 p-4">
+        <p class="text-sm text-red-700">{{ error }}</p>
+    </div>
+    {% endif %}
+
+    <form action="/plans/upload" method="POST" class="space-y-6">
+        <div class="bg-white shadow sm:rounded-lg p-6">
+            <!-- Title -->
+            <div class="mb-6">
+                <label for="title" class="block text-sm font-medium text-gray-700">Plan Title</label>
+                <input type="text" name="title" id="title" value="Untitled Plan"
+                       class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                       placeholder="e.g., Slow user search query">
+            </div>
+
+            <!-- Plan JSON -->
+            <div class="mb-6">
+                <label for="plan_json" class="block text-sm font-medium text-gray-700">
+                    EXPLAIN JSON
+                    <span class="text-red-500">*</span>
+                </label>
+                <p class="mt-1 text-xs text-gray-500 mb-2">
+                    Run <code class="bg-gray-100 px-1 py-0.5 rounded">EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) your_query;</code> in psql or pgAdmin, then paste the JSON output here.
+                </p>
+                <textarea name="plan_json" id="plan_json" rows="12" required
+                          class="code-block block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                          placeholder='[
+  {
+    "Plan": {
+      "Node Type": "Seq Scan",
+      "Relation Name": "users",
+      ...
+    },
+    "Execution Time": 123.456
+  }
+]'></textarea>
+            </div>
+
+            <!-- SQL (optional) -->
+            <div class="mb-6">
+                <label for="sql_text" class="block text-sm font-medium text-gray-700">SQL Query (optional)</label>
+                <p class="mt-1 text-xs text-gray-500 mb-2">
+                    Providing the SQL enables enhanced analysis: index recommendations, CTE detection, and more.
+                </p>
+                <textarea name="sql_text" id="sql_text" rows="4"
+                          class="code-block block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                          placeholder="SELECT * FROM users WHERE email = 'user@example.com';"></textarea>
+            </div>
+
+            <!-- Tags -->
+            <div>
+                <label for="tags" class="block text-sm font-medium text-gray-700">Tags (optional)</label>
+                <input type="text" name="tags" id="tags"
+                       class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                       placeholder="e.g., production, user-search, slow">
+                <p class="mt-1 text-xs text-gray-500">Comma-separated tags for organizing plans.</p>
+            </div>
+        </div>
+
+        <div class="flex justify-end gap-3">
+            <a href="/plans" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
+                Cancel
+            </a>
+            <button type="submit"
+                    class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+                Analyze &amp; Save
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

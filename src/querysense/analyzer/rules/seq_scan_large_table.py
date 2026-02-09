@@ -37,7 +37,7 @@ from querysense.analyzer.registry import register_rule
 from querysense.analyzer.rules.base import Rule, RuleConfig, SQLEnhanceable
 
 if TYPE_CHECKING:
-    from querysense.analyzer.sql_parser import QueryInfo
+    from querysense.analyzer.sql_ast import QueryInfo
     from querysense.parser.models import ExplainOutput, PlanNode
 
 

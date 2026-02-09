@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-50">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}QuerySense Cloud{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eef2ff', 100: '#e0e7ff', 200: '#c7d2fe', 300: '#a5b4fc', 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Badge Styles */
+        .badge-critical { background-color: #fee2e2; color: #991b1b; }
+        .badge-warning { background-color: #fef9c3; color: #854d0e; }
+        .badge-info { background-color: #dbeafe; color: #1e40af; }
+        .badge-success { background-color: #dcfce7; color: #166534; }
+        .badge-high { background-color: #ffedd5; color: #9a3412; }
+        .badge-medium { background-color: #fef9c3; color: #854d0e; }
+        .badge-low { background-color: #f0fdf4; color: #166534; }
+
+        /* Code Block */
+        .code-block {
+            background-color: #1e293b;
+            color: #e2e8f0;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 0.8125rem;
+            line-height: 1.6;
+        }
+
+        /* Stat Card */
+        .stat-card {
+            background: white;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid #e5e7eb;
+            transition: all 0.2s ease;
+        }
+        .stat-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); transform: translateY(-1px); }
+
+        /* Severity Dots */
+        .severity-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .severity-dot.critical { background: #ef4444; }
+        .severity-dot.high { background: #f97316; }
+        .severity-dot.warning { background: #eab308; }
+        .severity-dot.medium { background: #eab308; }
+        .severity-dot.low { background: #22c55e; }
+        .severity-dot.info { background: #3b82f6; }
+
+        /* HTMX */
+        .htmx-indicator { opacity: 0; transition: opacity 200ms ease-in; }
+        .htmx-request .htmx-indicator { opacity: 1; }
+        .htmx-request.htmx-indicator { opacity: 1; }
+
+        /* Navigation */
+        .nav-link { transition: all 0.15s ease; }
+        .nav-link:hover { background-color: #f3f4f6; }
+        .nav-link.active { background-color: #eef2ff; color: #4f46e5; font-weight: 600; }
+
+        /* Animations */
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+        .slide-in { animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
+
+        /* Plan Tree */
+        .plan-node {
+            border-left: 2px solid #e5e7eb;
+            padding-left: 1rem;
+            margin-left: 0.5rem;
+            position: relative;
+        }
+        .plan-node::before {
+            content: '';
+            position: absolute;
+            left: -2px;
+            top: 0;
+            width: 12px;
+            height: 1px;
+            background: #e5e7eb;
+        }
+        .plan-node-root { border-left: none; margin-left: 0; padding-left: 0; }
+        .plan-node-root::before { display: none; }
+
+        .plan-node-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.125rem 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .plan-node-badge.seq-scan { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+        .plan-node-badge.index-scan { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+        .plan-node-badge.hash-join { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+        .plan-node-badge.nested-loop { background: #fefce8; color: #854d0e; border: 1px solid #fde68a; }
+        .plan-node-badge.sort { background: #faf5ff; color: #6b21a8; border: 1px solid #e9d5ff; }
+        .plan-node-badge.default { background: #f9fafb; color: #374151; border: 1px solid #e5e7eb; }
+
+        /* Progress Bar */
+        .progress-bar { height: 6px; border-radius: 3px; background: #e5e7eb; overflow: hidden; }
+        .progress-bar-fill { height: 100%; border-radius: 3px; transition: width 0.8s ease-out; }
+
+        /* Pulse animation for live indicators */
+        .pulse-live {
+            animation: pulseLive 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulseLive {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Glass card effect */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        /* Gradient text */
+        .gradient-text {
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* Tab styles */
+        .tab-btn { padding: 0.5rem 1rem; font-size: 0.875rem; font-weight: 500; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.15s; cursor: pointer; }
+        .tab-btn:hover { color: #374151; }
+        .tab-btn.active { color: #4f46e5; border-bottom-color: #4f46e5; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Tooltip */
+        [data-tooltip] { position: relative; }
+        [data-tooltip]:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 0.25rem 0.5rem;
+            background: #1f2937;
+            color: white;
+            font-size: 0.75rem;
+            border-radius: 0.375rem;
+            white-space: nowrap;
+            z-index: 50;
+            margin-bottom: 4px;
+        }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body class="h-full">
+    <div class="min-h-full flex">
+        <!-- Mobile Menu Overlay -->
+        <div id="mobile-overlay" class="fixed inset-0 bg-gray-900/50 z-40 lg:hidden hidden" onclick="toggleMobileMenu()"></div>
+
+        <!-- Sidebar -->
+        <aside id="sidebar" class="fixed inset-y-0 z-50 flex flex-col w-64 bg-white border-r border-gray-200 transform -translate-x-full lg:translate-x-0 transition-transform duration-200">
+            <div class="flex items-center h-16 px-6 border-b border-gray-200">
+                <a href="/" class="flex items-center space-x-2">
+                    <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
+                        <span class="text-white font-bold text-sm">QS</span>
+                    </div>
+                    <span class="text-lg font-bold text-gray-900">QuerySense</span>
+                </a>
+                <button class="lg:hidden ml-auto p-1 text-gray-400 hover:text-gray-600" onclick="toggleMobileMenu()">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+
+            <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+                {% if user is defined and user %}
+                <a href="/" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg {% if request.url.path == '/' %}active{% else %}text-gray-700{% endif %}">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                    Dashboard
+                </a>
+
+                <div class="pt-4">
+                    <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Analysis</p>
+                </div>
+                <a href="/plans" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg {% if request.url.path.startswith('/plans') %}active{% else %}text-gray-700{% endif %}">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    Plans
+                </a>
+                <a href="/plans/upload" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg text-gray-700">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    Upload Plan
+                </a>
+
+                <div class="pt-4">
+                    <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Prevention</p>
+                </div>
+                <a href="/watch" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg {% if request.url.path.startswith('/watch') %}active{% else %}text-gray-700{% endif %}">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                    Watch
+                    <span class="ml-auto inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Live</span>
+                </a>
+                <a href="/regressions" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg {% if request.url.path.startswith('/regressions') %}active{% else %}text-gray-700{% endif %}">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"></path></svg>
+                    Regressions
+                </a>
+                <a href="/upgrade" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg {% if request.url.path.startswith('/upgrade') %}active{% else %}text-gray-700{% endif %}">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    Upgrade Validator
+                </a>
+
+                <div class="pt-4">
+                    <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Compliance</p>
+                </div>
+                <a href="/compliance" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg {% if request.url.path.startswith('/compliance') %}active{% else %}text-gray-700{% endif %}">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                    Compliance
+                </a>
+
+                <div class="pt-4">
+                    <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Settings</p>
+                </div>
+                <a href="/settings/api-keys" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg {% if request.url.path == '/settings/api-keys' %}active{% else %}text-gray-700{% endif %}">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path></svg>
+                    API Keys
+                </a>
+                <a href="/settings/billing" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg {% if request.url.path == '/settings/billing' %}active{% else %}text-gray-700{% endif %}">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
+                    Billing
+                </a>
+                {% else %}
+                <a href="/login" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg text-gray-700">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
+                    Sign In
+                </a>
+                <a href="/pricing" class="nav-link flex items-center px-3 py-2 text-sm rounded-lg text-gray-700">
+                    <svg class="w-5 h-5 mr-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Pricing
+                </a>
+                {% endif %}
+            </nav>
+
+            {% if user is defined and user %}
+            <div class="p-4 border-t border-gray-200">
+                <div class="flex items-center">
+                    <div class="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center">
+                        <span class="text-sm font-medium text-brand-700">{{ user.display_name[:1] | upper }}</span>
+                    </div>
+                    <div class="ml-3 flex-1 min-w-0">
+                        <p class="text-sm font-medium text-gray-900 truncate">{{ user.display_name }}</p>
+                        <p class="text-xs text-gray-500 truncate">{{ user.email }}</p>
+                    </div>
+                    <a href="/logout" class="text-gray-400 hover:text-gray-600" title="Sign out">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+        </aside>
+
+        <!-- Main content -->
+        <div class="lg:pl-64 flex flex-col flex-1">
+            <!-- Top bar (mobile) -->
+            <header class="lg:hidden flex items-center h-16 px-4 bg-white border-b border-gray-200">
+                <button onclick="toggleMobileMenu()" class="p-2 -ml-2 text-gray-500 hover:text-gray-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                </button>
+                <a href="/" class="flex items-center space-x-2 ml-3">
+                    <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
+                        <span class="text-white font-bold text-sm">QS</span>
+                    </div>
+                    <span class="text-lg font-bold text-gray-900">QuerySense</span>
+                </a>
+            </header>
+
+            <main class="flex-1 px-4 py-8 sm:px-6 lg:px-8 fade-in">
+                {% block content %}{% endblock %}
+            </main>
+
+            <footer class="border-t border-gray-200 bg-white mt-auto">
+                <div class="px-4 py-4 sm:px-6 lg:px-8">
+                    <p class="text-center text-xs text-gray-400">
+                        QuerySense Cloud v{{ qs_version | default("0.5.2") }} &mdash;
+                        Catch slow queries before they ship.
+                    </p>
+                </div>
+            </footer>
+        </div>
+    </div>
+
+    <script>
+    function toggleMobileMenu() {
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('mobile-overlay');
+        sidebar.classList.toggle('-translate-x-full');
+        overlay.classList.toggle('hidden');
+    }
+
+    // Tab switching helper
+    function initTabs(containerId) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        const btns = container.querySelectorAll('.tab-btn');
+        const contents = container.querySelectorAll('.tab-content');
+        btns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                btns.forEach(b => b.classList.remove('active'));
+                contents.forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                const target = document.getElementById(btn.dataset.tab);
+                if (target) target.classList.add('active');
+            });
+        });
+    }
+
+    // Copy to clipboard helper
+    function copyToClipboard(text, btn) {
+        navigator.clipboard.writeText(text).then(() => {
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+            setTimeout(() => { btn.innerHTML = orig; }, 1500);
+        });
+    }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

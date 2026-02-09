@@ -1,11 +1,18 @@
 """
-Rule DAG (Directed Acyclic Graph) execution engine.
+Rule DAG (Directed Acyclic Graph) - the single authoritative module for
+rule dependency management.
 
 Implements deterministic rule execution with:
 - Topological sorting based on requires/provides
 - Cycle detection at startup (fail fast)
 - SKIP as a first-class outcome
 - Typed capability checking
+
+This module provides two levels of abstraction:
+1. build_rule_dag(): Simple convenience function for topological sorting.
+   Used by the Analyzer for basic rule ordering.
+2. RuleDAG + DAGExecutor: Full framework for validated, phase-aware
+   execution with capability checking. Used for advanced scenarios.
 
 Design principles:
 - The DAG is the truth: execution order is determined by dependencies
@@ -14,11 +21,14 @@ Design principles:
 - Deterministic: same inputs always produce same execution order
 
 Usage:
+    # Simple: just sort rules
+    from querysense.analyzer.dag import build_rule_dag
+    sorted_rules = build_rule_dag(rules)
+
+    # Advanced: full DAG validation and execution
     from querysense.analyzer.dag import RuleDAG, DAGExecutor
-    
     dag = RuleDAG(rules)
-    dag.validate()  # Raises if cycles or unknown capabilities
-    
+    dag.validate()
     executor = DAGExecutor(dag, fact_store, config)
     results = executor.execute(explain)
 """
@@ -29,7 +39,7 @@ import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING
 
 from querysense.analyzer.capabilities import (
     Capability,
@@ -46,7 +56,9 @@ from querysense.analyzer.models import (
 
 if TYPE_CHECKING:
     from querysense.analyzer.rules.base import Rule, RuleContext
+    from querysense.analyzer.sql_ast import QueryInfo
     from querysense.config import Config
+    from querysense.db.probe import DBProbe
     from querysense.parser.models import ExplainOutput
 
 logger = logging.getLogger(__name__)
@@ -59,7 +71,7 @@ class DAGValidationError(Exception):
 
 class CycleDetectedError(DAGValidationError):
     """Raised when a cycle is detected in the rule DAG."""
-    
+
     def __init__(self, cycle: list[str]) -> None:
         self.cycle = cycle
         super().__init__(f"Cycle detected in rule DAG: {' -> '.join(cycle)}")
@@ -428,8 +440,8 @@ class DAGExecutor:
         self,
         explain: "ExplainOutput",
         prior_findings: list[Finding] | None = None,
-        query_info: Any = None,
-        db_probe: Any = None,
+        query_info: "QueryInfo | None" = None,
+        db_probe: "DBProbe | None" = None,
     ) -> ExecutionResult:
         """
         Execute all rules according to the DAG.
@@ -477,8 +489,8 @@ class DAGExecutor:
         rule_ids: list[str],
         explain: "ExplainOutput",
         prior_findings: list[Finding],
-        query_info: Any,
-        db_probe: Any,
+        query_info: "QueryInfo | None",
+        db_probe: "DBProbe | None",
     ) -> tuple[list[Finding], list[RuleRun]]:
         """Execute a phase of rules."""
         findings: list[Finding] = []
@@ -566,12 +578,12 @@ class DAGExecutor:
         rule: "Rule",
         explain: "ExplainOutput",
         prior_findings: list[Finding],
-        query_info: Any,
-        db_probe: Any,
+        query_info: "QueryInfo | None",
+        db_probe: "DBProbe | None",
     ) -> list[Finding]:
         """Run a single rule."""
         from querysense.analyzer.rules.base import RuleContext
-        
+
         # Check if rule uses context-aware execution
         if rule.uses_context:
             ctx = RuleContext(
@@ -584,3 +596,122 @@ class DAGExecutor:
             return rule.analyze_with_context(ctx)
         else:
             return rule.analyze(explain, prior_findings)
+
+
+# =============================================================================
+# Convenience function: simple topological sort without full DAG framework
+# =============================================================================
+
+
+def build_rule_dag(rules: list["Rule"]) -> list["Rule"]:
+    """
+    Build and validate the rule dependency DAG, returning rules in
+    topological order (dependencies before dependents).
+
+    This is the simple convenience function for rule ordering. For
+    full DAG validation and execution, use RuleDAG + DAGExecutor.
+
+    Algorithm: Kahn's algorithm for topological sorting.
+
+    Args:
+        rules: List of Rule objects to sort
+
+    Returns:
+        Rules in topological order
+
+    Raises:
+        CycleDetectedError: If dependencies form a cycle
+    """
+    if not rules:
+        return []
+
+    # Build adjacency list and in-degree count
+    rule_map = {r.rule_id: r for r in rules}
+    provides_map: dict[str, set[str]] = {}  # capability -> rules that provide it
+
+    # First pass: build provides_map
+    for rule in rules:
+        for cap in rule.provides:
+            cap_str = cap.value if isinstance(cap, Capability) else str(cap)
+            if cap_str not in provides_map:
+                provides_map[cap_str] = set()
+            provides_map[cap_str].add(rule.rule_id)
+
+    # Build edges: for each rule, find rules that provide what it requires
+    edges: dict[str, set[str]] = {r.rule_id: set() for r in rules}
+    in_degree: dict[str, int] = {r.rule_id: 0 for r in rules}
+
+    for rule in rules:
+        for cap in rule.requires:
+            cap_str = cap.value if isinstance(cap, Capability) else str(cap)
+
+            # Find rules that provide this capability
+            providers = provides_map.get(cap_str, set())
+            for provider_id in providers:
+                if provider_id != rule.rule_id:
+                    # Edge: provider -> rule (provider must run first)
+                    if rule.rule_id not in edges[provider_id]:
+                        edges[provider_id].add(rule.rule_id)
+                        in_degree[rule.rule_id] += 1
+
+    # Kahn's algorithm
+    queue = [rule_id for rule_id, degree in in_degree.items() if degree == 0]
+    sorted_ids: list[str] = []
+
+    while queue:
+        rule_id = queue.pop(0)
+        sorted_ids.append(rule_id)
+
+        for dependent_id in edges[rule_id]:
+            in_degree[dependent_id] -= 1
+            if in_degree[dependent_id] == 0:
+                queue.append(dependent_id)
+
+    # Check for cycle
+    if len(sorted_ids) != len(rules):
+        # Find the cycle for error message
+        remaining = set(rule_map.keys()) - set(sorted_ids)
+        cycle = _find_cycle(remaining, edges)
+        raise CycleDetectedError(cycle)
+
+    return [rule_map[rule_id] for rule_id in sorted_ids]
+
+
+def _find_cycle(remaining: set[str], edges: dict[str, set[str]]) -> list[str]:
+    """Find a cycle in the remaining nodes for error reporting."""
+    for start in remaining:
+        visited: set[str] = set()
+        path: list[str] = []
+
+        if _dfs_find_cycle(start, remaining, edges, visited, path):
+            return path
+
+    return list(remaining)[:5] + ["..."]
+
+
+def _dfs_find_cycle(
+    node: str,
+    remaining: set[str],
+    edges: dict[str, set[str]],
+    visited: set[str],
+    path: list[str],
+) -> bool:
+    """DFS helper to find cycle."""
+    if node in visited:
+        cycle_start = path.index(node) if node in path else 0
+        path[:] = path[cycle_start:] + [node]
+        return True
+
+    if node not in remaining:
+        return False
+
+    visited.add(node)
+    path.append(node)
+
+    for neighbor in edges.get(node, set()):
+        if neighbor in remaining:
+            if _dfs_find_cycle(neighbor, remaining, edges, visited, path):
+                return True
+
+    path.pop()
+    return False

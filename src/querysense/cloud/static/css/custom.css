@@ -1,0 +1,23 @@
+/* QuerySense Cloud — Minimal custom styles */
+/* Most styling is handled by Tailwind CSS via CDN */
+
+/* Ensure code blocks have proper word wrapping */
+.code-block {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Smooth page transitions for HTMX navigation */
+.htmx-settling {
+    opacity: 0.8;
+    transition: opacity 150ms ease-out;
+}
+
+/* Loading indicator animation */
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
+}

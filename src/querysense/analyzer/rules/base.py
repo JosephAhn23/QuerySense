@@ -27,7 +27,8 @@ from querysense.analyzer.models import Finding, NodeContext, RulePhase, Severity
 from querysense.analyzer.path import NodePath, traverse_with_path
 
 if TYPE_CHECKING:
-    from querysense.analyzer.sql_parser import QueryInfo
+    from querysense.analyzer.sql_ast import QueryInfo
+    from querysense.db.probe import DBProbe
     from querysense.parser.models import ExplainOutput, PlanNode
 
 
@@ -111,14 +112,14 @@ class RuleContext:
         self,
         explain: "ExplainOutput",
         prior_findings: list[Finding] | None = None,
-        query_info: Any | None = None,
-        db_probe: Any | None = None,
+        query_info: "QueryInfo | None" = None,
+        db_probe: "DBProbe | None" = None,
         capabilities: set[str] | None = None,
     ) -> None:
         self.explain = explain
         self.prior_findings = prior_findings or []
-        self.query_info = query_info
-        self.db_probe = db_probe
+        self.query_info: "QueryInfo | None" = query_info
+        self.db_probe: "DBProbe | None" = db_probe
         self.capabilities = capabilities or set()
     
     def has_capability(self, capability: str) -> bool:
@@ -129,12 +130,12 @@ class RuleContext:
         """
         Get table information from DB probe (if available).
         
-        Returns None if DB probe is not available.
+        Returns None if DB probe is not available or data not pre-fetched.
+        Note: DB probe operations are async; table info should be
+        pre-fetched into the FactStore before rule execution.
         """
         if self.db_probe is None:
             return None
-        # This would call the DB probe async method synchronously
-        # In practice, you'd want to pre-fetch this data
         return None
 
 

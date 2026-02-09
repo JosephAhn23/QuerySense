@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
@@ -229,6 +230,7 @@ class QueryStats:
     total_time_ms: float = 0.0
     mean_time_ms: float = 0.0
     rows: int = 0
+    query_text: str = ""
     
     @property
     def avg_rows_per_call(self) -> float:
@@ -236,6 +238,56 @@ class QueryStats:
         if self.calls == 0:
             return 0.0
         return self.rows / self.calls
+
+
+@dataclass(frozen=True)
+class TopQueryEntry:
+    """
+    A top-N query from pg_stat_statements for auto-baseline capture.
+
+    Represents a high-impact query identified by total execution time,
+    mean time, or call frequency. Used as the first stage of the
+    two-stage auto-capture pipeline:
+      1. pg_stat_statements identifies WHICH queries matter
+      2. EXPLAIN captures representative plans for those queries
+    """
+
+    queryid: int
+    query_text: str
+    calls: int = 0
+    total_time_ms: float = 0.0
+    mean_time_ms: float = 0.0
+    rows: int = 0
+    stddev_time_ms: float = 0.0
+    min_time_ms: float = 0.0
+    max_time_ms: float = 0.0
+
+    @property
+    def time_variance_ratio(self) -> float:
+        """Ratio of stddev to mean time — high values indicate parameter sensitivity."""
+        if self.mean_time_ms == 0:
+            return 0.0
+        return self.stddev_time_ms / self.mean_time_ms
+
+    @property
+    def is_parameter_sensitive(self) -> bool:
+        """Heuristic: query likely behaves differently with different parameters."""
+        return self.time_variance_ratio > 1.5 and self.calls >= 10
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "queryid": self.queryid,
+            "query_text": self.query_text[:200],  # Truncate for display
+            "calls": self.calls,
+            "total_time_ms": round(self.total_time_ms, 2),
+            "mean_time_ms": round(self.mean_time_ms, 2),
+            "stddev_time_ms": round(self.stddev_time_ms, 2),
+            "min_time_ms": round(self.min_time_ms, 2),
+            "max_time_ms": round(self.max_time_ms, 2),
+            "time_variance_ratio": round(self.time_variance_ratio, 2),
+            "is_parameter_sensitive": self.is_parameter_sensitive,
+        }
 
 
 @dataclass(frozen=True)
@@ -256,8 +308,28 @@ class DBProbe(Protocol):
     Protocol for database probe implementations.
     
     All methods are async and read-only.
-    Implementations must be time-bounded.
+    Implementations must be time-bounded and budget-aware.
+    
+    DBProbe is a fact provider:
+    - Populates FactStore with DB facts
+    - Adds capabilities based on successful queries
+    - Respects budget limits
     """
+    
+    @property
+    def budget(self) -> DBBudget:
+        """Get the current budget."""
+        ...
+    
+    @property
+    def budget_exceeded(self) -> bool:
+        """Check if budget has been exceeded."""
+        ...
+    
+    @property
+    def queries_succeeded(self) -> int:
+        """Number of successful queries executed."""
+        ...
     
     async def list_indexes(self, table: str, schema: str = "public") -> list[IndexInfo]:
         """List all indexes on a table."""
@@ -274,9 +346,51 @@ class DBProbe(Protocol):
     async def query_stats(self, queryid: int) -> QueryStats | None:
         """Get query statistics from pg_stat_statements (if available)."""
         ...
+
+    async def top_queries(
+        self,
+        limit: int = 20,
+        order_by: str = "total_time",
+        min_calls: int = 5,
+    ) -> list[TopQueryEntry]:
+        """
+        Get top-N queries from pg_stat_statements for auto-baseline capture.
+
+        This is the first stage of the two-stage auto-capture pipeline:
+        pg_stat_statements identifies which queries are worth baselining.
+
+        Args:
+            limit: Maximum number of queries to return
+            order_by: Sort criterion — "total_time", "mean_time", or "calls"
+            min_calls: Minimum call count to filter out one-off queries
+
+        Returns:
+            List of TopQueryEntry sorted by the chosen criterion
+        """
+        ...
     
     async def close(self) -> None:
         """Close the connection."""
+        ...
+    
+    async def populate_facts(
+        self,
+        fact_store: Any,
+        tables: list[str] | None = None,
+    ) -> bool:
+        """
+        Populate fact store with DB facts for the given tables.
+        
+        This is the preferred way to use DBProbe - it populates facts
+        and adds capabilities automatically.
+        
+        Args:
+            fact_store: FactStore to populate
+            tables: Tables to fetch info for (None = all from SQL)
+            
+        Returns:
+            True if at least one query succeeded (enables PLAN+SQL+DB)
+        """
         ...
 
 
@@ -286,15 +400,35 @@ class AsyncpgProbe:
     
     Preferred for async applications due to native async support
     and excellent performance.
+    
+    Supports budget controls for production safety.
     """
     
     def __init__(
         self,
         pool: "asyncpg.Pool",  # type: ignore[name-defined]
         timeout_seconds: float = 5.0,
+        budget: DBBudget | None = None,
     ) -> None:
         self._pool = pool
         self._timeout = timeout_seconds
+        self._budget = budget or DBBudget()
+        self._queries_succeeded = 0
+    
+    @property
+    def budget(self) -> DBBudget:
+        """Get the current budget."""
+        return self._budget
+    
+    @property
+    def budget_exceeded(self) -> bool:
+        """Check if budget has been exceeded."""
+        return self._budget.budget_exceeded
+    
+    @property
+    def queries_succeeded(self) -> int:
+        """Number of successful queries executed."""
+        return self._queries_succeeded
     
     @classmethod
     async def create(
@@ -303,6 +437,7 @@ class AsyncpgProbe:
         timeout_seconds: float = 5.0,
         min_connections: int = 1,
         max_connections: int = 5,
+        budget: DBBudget | None = None,
     ) -> "AsyncpgProbe":
         """Create a new probe with connection pool."""
         if not _ASYNCPG_AVAILABLE:
@@ -314,7 +449,48 @@ class AsyncpgProbe:
             max_size=max_connections,
             command_timeout=timeout_seconds,
         )
-        return cls(pool, timeout_seconds)
+        return cls(pool, timeout_seconds, budget)
+    
+    async def _execute_with_budget(
+        self,
+        query: str,
+        *args: Any,
+        fetch_one: bool = False,
+    ) -> Any:
+        """Execute a query with budget tracking."""
+        if not self._budget.can_execute():
+            logger.debug("Query skipped: budget exceeded")
+            return None if fetch_one else []
+        
+        start_time = time.perf_counter()
+        try:
+            async with self._pool.acquire() as conn:
+                if fetch_one:
+                    result = await asyncio.wait_for(
+                        conn.fetchrow(query, *args),
+                        timeout=self._timeout,
+                    )
+                else:
+                    result = await asyncio.wait_for(
+                        conn.fetch(query, *args),
+                        timeout=self._timeout,
+                    )
+            
+            duration = time.perf_counter() - start_time
+            self._budget.record_query(duration)
+            self._queries_succeeded += 1
+            return result
+            
+        except asyncio.TimeoutError:
+            duration = time.perf_counter() - start_time
+            self._budget.record_query(duration)
+            logger.warning("Query timed out after %.2fs", duration)
+            return None if fetch_one else []
+        except Exception as e:
+            duration = time.perf_counter() - start_time
+            self._budget.record_query(duration)
+            logger.warning("Query failed: %s", e)
+            return None if fetch_one else []
     
     async def list_indexes(self, table: str, schema: str = "public") -> list[IndexInfo]:
         """List all indexes on a table."""
@@ -339,11 +515,9 @@ class AsyncpgProbe:
             ORDER BY i.relname
         """
         
-        async with self._pool.acquire() as conn:
-            rows = await asyncio.wait_for(
-                conn.fetch(query, table, schema),
-                timeout=self._timeout,
-            )
+        rows = await self._execute_with_budget(query, table, schema)
+        if not rows:
+            return []
         
         return [
             IndexInfo(
@@ -382,11 +556,7 @@ class AsyncpgProbe:
               AND c.relkind = 'r'
         """
         
-        async with self._pool.acquire() as conn:
-            row = await asyncio.wait_for(
-                conn.fetchrow(query, table, schema),
-                timeout=self._timeout,
-            )
+        row = await self._execute_with_budget(query, table, schema, fetch_one=True)
         
         if row is None:
             return TableStats(table=table, schema=schema)
@@ -422,11 +592,9 @@ class AsyncpgProbe:
             )
         """
         
-        async with self._pool.acquire() as conn:
-            rows = await asyncio.wait_for(
-                conn.fetch(query),
-                timeout=self._timeout,
-            )
+        rows = await self._execute_with_budget(query)
+        if not rows:
+            return DBSettings()
         
         settings_dict = {row['name']: row['setting'] for row in rows}
         
@@ -473,6 +641,129 @@ class AsyncpgProbe:
         except Exception:
             # pg_stat_statements might not be installed
             return None
+
+    async def top_queries(
+        self,
+        limit: int = 20,
+        order_by: str = "total_time",
+        min_calls: int = 5,
+    ) -> list[TopQueryEntry]:
+        """
+        Get top-N queries from pg_stat_statements for auto-baseline capture.
+
+        First stage of the two-stage pipeline: identify which queries matter.
+        """
+        order_column = {
+            "total_time": "total_exec_time",
+            "mean_time": "mean_exec_time",
+            "calls": "calls",
+        }.get(order_by, "total_exec_time")
+
+        query = f"""
+            SELECT
+                queryid,
+                query,
+                calls,
+                total_exec_time AS total_time_ms,
+                mean_exec_time AS mean_time_ms,
+                stddev_exec_time AS stddev_time_ms,
+                min_exec_time AS min_time_ms,
+                max_exec_time AS max_time_ms,
+                rows
+            FROM pg_stat_statements
+            WHERE calls >= $1
+              AND query NOT LIKE 'SET %%'
+              AND query NOT LIKE 'SHOW %%'
+              AND query NOT LIKE 'BEGIN%%'
+              AND query NOT LIKE 'COMMIT%%'
+              AND query NOT LIKE 'ROLLBACK%%'
+            ORDER BY {order_column} DESC
+            LIMIT $2
+        """
+
+        try:
+            rows = await self._execute_with_budget(query, min_calls, limit)
+            if not rows:
+                return []
+
+            return [
+                TopQueryEntry(
+                    queryid=row['queryid'],
+                    query_text=row['query'] or "",
+                    calls=row['calls'],
+                    total_time_ms=row['total_time_ms'] or 0.0,
+                    mean_time_ms=row['mean_time_ms'] or 0.0,
+                    stddev_time_ms=row['stddev_time_ms'] or 0.0,
+                    min_time_ms=row['min_time_ms'] or 0.0,
+                    max_time_ms=row['max_time_ms'] or 0.0,
+                    rows=row['rows'] or 0,
+                )
+                for row in rows
+            ]
+        except Exception as e:
+            logger.warning("Failed to fetch top queries: %s", e)
+            return []
+    
+    async def populate_facts(
+        self,
+        fact_store: Any,
+        tables: list[str] | None = None,
+    ) -> bool:
+        """
+        Populate fact store with DB facts for the given tables.
+        
+        This is the preferred way to use DBProbe - it populates facts
+        and adds capabilities automatically.
+        
+        Args:
+            fact_store: FactStore to populate
+            tables: Tables to fetch info for
+            
+        Returns:
+            True if at least one query succeeded (enables PLAN+SQL+DB)
+        """
+        from querysense.analyzer.capabilities import Capability, FactKey
+        
+        if not tables:
+            return False
+        
+        initial_succeeded = self._queries_succeeded
+        table_stats_dict: dict[str, TableStats] = {}
+        table_indexes_dict: dict[str, list[IndexInfo]] = {}
+        
+        # Fetch DB settings first
+        settings = await self.settings()
+        if self._queries_succeeded > initial_succeeded:
+            fact_store.set(FactKey.DB_SETTINGS, settings, source_rule="db_probe")
+            fact_store.add_capability(Capability.DB_SETTINGS)
+        
+        # Fetch stats and indexes for each table
+        for table in tables:
+            if self.budget_exceeded:
+                break
+            
+            stats = await self.table_stats(table)
+            if stats.reltuples > 0:  # Only store if we got real data
+                table_stats_dict[table] = stats
+            
+            if self.budget_exceeded:
+                break
+            
+            indexes = await self.list_indexes(table)
+            if indexes:
+                table_indexes_dict[table] = indexes
+        
+        # Store facts if we got any data
+        if table_stats_dict:
+            fact_store.set(FactKey.TABLE_STATS, table_stats_dict, source_rule="db_probe")
+            fact_store.add_capability(Capability.DB_STATS)
+        
+        if table_indexes_dict:
+            fact_store.set(FactKey.TABLE_INDEXES, table_indexes_dict, source_rule="db_probe")
+            fact_store.add_capability(Capability.DB_INDEXES)
+        
+        # Return True if any queries succeeded
+        return self._queries_succeeded > initial_succeeded
     
     async def close(self) -> None:
         """Close the connection pool."""
@@ -484,7 +775,27 @@ class MockProbe:
     Mock probe for testing without a database.
     
     Returns empty results for all queries.
+    Respects budget controls like a real probe.
     """
+    
+    def __init__(self, budget: DBBudget | None = None) -> None:
+        self._budget = budget or DBBudget(dry_run=True)
+        self._queries_succeeded = 0
+    
+    @property
+    def budget(self) -> DBBudget:
+        """Get the current budget."""
+        return self._budget
+    
+    @property
+    def budget_exceeded(self) -> bool:
+        """Check if budget has been exceeded."""
+        return self._budget.budget_exceeded
+    
+    @property
+    def queries_succeeded(self) -> int:
+        """Number of successful queries executed."""
+        return self._queries_succeeded
     
     async def list_indexes(self, table: str, schema: str = "public") -> list[IndexInfo]:
         return []
@@ -497,6 +808,22 @@ class MockProbe:
     
     async def query_stats(self, queryid: int) -> QueryStats | None:
         return None
+
+    async def top_queries(
+        self,
+        limit: int = 20,
+        order_by: str = "total_time",
+        min_calls: int = 5,
+    ) -> list[TopQueryEntry]:
+        return []
+    
+    async def populate_facts(
+        self,
+        fact_store: Any,
+        tables: list[str] | None = None,
+    ) -> bool:
+        """Mock populate_facts - always returns False (no queries executed)."""
+        return False
     
     async def close(self) -> None:
         pass
@@ -505,6 +832,7 @@ class MockProbe:
 async def get_probe(
     dsn: str | None = None,
     timeout_seconds: float = 5.0,
+    budget: DBBudget | None = None,
 ) -> DBProbe:
     """
     Get a database probe instance.
@@ -512,15 +840,16 @@ async def get_probe(
     Args:
         dsn: PostgreSQL connection string. If None, returns a mock probe.
         timeout_seconds: Query timeout in seconds.
+        budget: Budget controls for production safety.
         
     Returns:
         DBProbe instance (AsyncpgProbe if dsn provided, MockProbe otherwise).
     """
     if dsn is None:
-        return MockProbe()
+        return MockProbe(budget=budget)
     
     if _ASYNCPG_AVAILABLE:
-        return await AsyncpgProbe.create(dsn, timeout_seconds)
+        return await AsyncpgProbe.create(dsn, timeout_seconds, budget=budget)
     
     raise RuntimeError(
         "No database driver available. Install asyncpg: pip install asyncpg"

@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Pricing — QuerySense{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto">
+    <div class="text-center mb-12">
+        <h1 class="text-3xl font-bold text-gray-900">Simple, transparent pricing</h1>
+        <p class="mt-4 text-lg text-gray-500">Start free, scale as you grow. No credit card required.</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- Free -->
+        <div class="bg-white rounded-xl border border-gray-200 p-6 flex flex-col">
+            <div class="mb-6">
+                <h3 class="text-lg font-semibold text-gray-900">Free</h3>
+                <div class="mt-2">
+                    <span class="text-4xl font-bold text-gray-900">$0</span>
+                    <span class="text-sm text-gray-500">/month</span>
+                </div>
+                <p class="mt-2 text-sm text-gray-500">For individual developers</p>
+            </div>
+            <ul class="space-y-3 flex-1 text-sm text-gray-600">
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Unlimited local analysis
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    3 private repos CI/CD
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    24+ detection rules
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Baseline management
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    10 queries for upgrade compare
+                </li>
+            </ul>
+            <a href="/register" class="mt-6 block w-full text-center px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50">
+                Get Started
+            </a>
+        </div>
+
+        <!-- Team -->
+        <div class="bg-white rounded-xl border-2 border-brand-500 p-6 flex flex-col relative">
+            <div class="absolute -top-3 left-1/2 -translate-x-1/2 inline-flex items-center px-3 py-1 rounded-full bg-brand-600 text-white text-xs font-semibold">
+                Most Popular
+            </div>
+            <div class="mb-6">
+                <h3 class="text-lg font-semibold text-gray-900">Team</h3>
+                <div class="mt-2">
+                    <span class="text-4xl font-bold text-gray-900">$29</span>
+                    <span class="text-sm text-gray-500">/month</span>
+                </div>
+                <p class="mt-2 text-sm text-gray-500">For development teams</p>
+            </div>
+            <ul class="space-y-3 flex-1 text-sm text-gray-600">
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Everything in Free
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Unlimited repos CI/CD
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Full policy engine
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    GitHub App integration
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Shadow DB with real stats
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Slack/PagerDuty alerts
+                </li>
+            </ul>
+            <a href="/register" class="mt-6 block w-full text-center px-4 py-2 bg-brand-600 rounded-lg text-sm font-medium text-white hover:bg-brand-700">
+                Start Free Trial
+            </a>
+        </div>
+
+        <!-- Pro -->
+        <div class="bg-white rounded-xl border border-gray-200 p-6 flex flex-col">
+            <div class="mb-6">
+                <h3 class="text-lg font-semibold text-gray-900">Pro</h3>
+                <div class="mt-2">
+                    <span class="text-4xl font-bold text-gray-900">$99</span>
+                    <span class="text-sm text-gray-500">/month</span>
+                </div>
+                <p class="mt-2 text-sm text-gray-500">For compliance-conscious teams</p>
+            </div>
+            <ul class="space-y-3 flex-1 text-sm text-gray-600">
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Everything in Team
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    All compliance packs
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Upgrade validation (unlimited)
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    SARIF audit reports
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Auto-PII detection
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    pgAudit validation
+                </li>
+            </ul>
+            <a href="/register" class="mt-6 block w-full text-center px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50">
+                Start Free Trial
+            </a>
+        </div>
+
+        <!-- Enterprise -->
+        <div class="bg-gray-900 rounded-xl p-6 flex flex-col text-white">
+            <div class="mb-6">
+                <h3 class="text-lg font-semibold">Enterprise</h3>
+                <div class="mt-2">
+                    <span class="text-4xl font-bold">Custom</span>
+                </div>
+                <p class="mt-2 text-sm text-gray-400">For organizations with strict requirements</p>
+            </div>
+            <ul class="space-y-3 flex-1 text-sm text-gray-300">
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-brand-400 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Everything in Pro
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-brand-400 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    SSO / SAML
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-brand-400 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Self-hosted deployment
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-brand-400 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Custom compliance rules
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-brand-400 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    SLA guarantee
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-4 h-4 text-brand-400 mt-0.5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                    Dedicated support
+                </li>
+            </ul>
+            <a href="mailto:support@querysense.dev" class="mt-6 block w-full text-center px-4 py-2 bg-white rounded-lg text-sm font-medium text-gray-900 hover:bg-gray-100">
+                Contact Sales
+            </a>
+        </div>
+    </div>
+
+    <!-- FAQ -->
+    <div class="mt-16 max-w-3xl mx-auto">
+        <h2 class="text-2xl font-bold text-gray-900 text-center mb-8">Frequently Asked Questions</h2>
+        <div class="space-y-6">
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900">Is QuerySense open source?</h3>
+                <p class="mt-1 text-sm text-gray-500">Yes! QuerySense core is MIT-licensed. The CLI, analyzer, and all detection rules are free and open source. Cloud features (dashboard, team collaboration, compliance packs) are available in paid tiers.</p>
+            </div>
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900">Does QuerySense need access to my database?</h3>
+                <p class="mt-1 text-sm text-gray-500">No. Core analysis works entirely offline with EXPLAIN JSON output. Database connection is optional for Level 3 enhanced analysis (index validation, statistics freshness checks) and the watch daemon.</p>
+            </div>
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900">How does QuerySense compare to pganalyze?</h3>
+                <p class="mt-1 text-sm text-gray-500">pganalyze is a production monitoring dashboard ($149+/mo). QuerySense is a pre-production prevention tool (free-$99/mo). They're complementary: QuerySense catches issues before deployment, pganalyze monitors after. QuerySense uniquely offers CI/CD gating, plan regression detection, and compliance enforcement.</p>
+            </div>
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900">What PostgreSQL versions are supported?</h3>
+                <p class="mt-1 text-sm text-gray-500">QuerySense supports PostgreSQL 12-18. The upgrade validator has version-specific knowledge for PG14→18 optimizer changes. MySQL support is experimental.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

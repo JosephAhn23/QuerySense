@@ -13,12 +13,12 @@ Analyze PostgreSQL EXPLAIN plans and get actionable performance fixes.
 
 | Aspect | Status |
 |--------|--------|
-| **Version** | 0.4.0 (Beta) |
+| **Version** | 0.5.2 (Beta) |
 | **Stability** | [See STABILITY.md](STABILITY.md) |
 | **Security** | [See SECURITY.md](SECURITY.md) |
 | **Changelog** | [See CHANGELOG.md](CHANGELOG.md) |
 
-> **Note**: QuerySense is in active development (0.x). The API may change between minor versions. Pin to `querysense>=0.4.0,<0.5.0` for stability.
+> **Note**: QuerySense is in active development (0.x). The API may change between minor versions. Pin to `querysense>=0.5.0,<0.6.0` for stability.
 
 ```bash
 $ querysense analyze slow_query.json
@@ -86,8 +86,9 @@ psql < fixes.sql
 | Foreign key without index | WARNING/CRITICAL | `CREATE INDEX` on FK column |
 | Stale statistics | WARNING/CRITICAL | `ANALYZE table` |
 | Table bloat | INFO/CRITICAL | `VACUUM ANALYZE` |
+| Partition pruning failure | WARNING | Fix partition key in WHERE clause |
 
-**11 rules** that catch real PostgreSQL performance problems.
+**19 rules** that catch real PostgreSQL performance problems — including CTE materialization, lossy bitmap scans, non-sargable filters, plan shape regression, and more.
 
 ## Verify It Helped
 
@@ -123,20 +124,42 @@ Stress-tested on 250,000 query plans:
 
 ## Why QuerySense?
 
-| Feature | QuerySense | pgMustard | pganalyze | PEV2 |
-|---------|-----------|-----------|-----------|------|
-| **Price** | Free | $29/mo | $499/mo | Free |
-| **CLI tool** | Yes | No | No | No |
-| **Copy-paste SQL fixes** | Yes | Partial | Yes | No |
-| **Works offline** | Yes | No | No | Yes |
-| **No account required** | Yes | No | No | Yes |
+| Feature | QuerySense | pgMustard | pganalyze | PEV2 | PgAdmin |
+|---------|-----------|-----------|-----------|------|---------|
+| **Price** | Free | $19/mo | $99+/mo | Free | Free |
+| **CLI tool** | Yes | No | No | No | No |
+| **Copy-paste SQL fixes** | Yes | Partial | Yes | No | No |
+| **Works offline** | Yes | No | No | Yes | Yes |
+| **No account required** | Yes | No | No | Yes | Yes |
+| **CI/CD ready** | Yes | No | Yes | No | No |
+
+> *Use PEV2 or PgAdmin to **see** the plan. Use QuerySense to **fix** it.*
+
+See [docs/comparison.md](docs/comparison.md) for a detailed breakdown.
+
+## Compatibility
+
+QuerySense works with any database that produces PostgreSQL-compatible EXPLAIN JSON output:
+
+| Database | Status | Notes |
+|----------|--------|-------|
+| **PostgreSQL** 12+ | Fully supported | Primary target |
+| **TimescaleDB** | Compatible | Hypertable scans analyzed like regular tables |
+| **YugabyteDB** | Compatible | PostgreSQL-compatible EXPLAIN output |
+| **pgvector** | Compatible | Index scans on vector columns detected |
+| **PostGIS** | Compatible | Spatial index recommendations supported |
+| **Citus** | Compatible | Distributed plan analysis |
+| **MySQL** | Experimental | Basic EXPLAIN JSON support ([see branch](https://github.com/JosephAhn23/Query-Sense/tree/feature/mysql-support)) |
+
+> QuerySense analyzes the **plan structure**, not database-specific syntax. If your database outputs PostgreSQL-format EXPLAIN JSON, QuerySense can analyze it.
 
 ## Philosophy
 
 - **Deterministic** - No AI, no API keys, works offline
 - **Actionable** - Every issue includes copy-paste SQL to fix it
-- **Focused** - 11 rules that catch real problems
+- **Focused** - 19 rules that catch real problems, with more shipping regularly
 - **Honest** - Only flags issues we're confident about
+- **Fast** - 652 plans/second — built for CI pipelines, not just one-off debugging
 
 ## Advanced Usage
 
@@ -209,4 +232,4 @@ MIT - See [LICENSE](LICENSE) for details.
 
 ---
 
-*v0.4.0 - Thread-safe, async support, 11 PostgreSQL rules, 652 plans/sec*
+*v0.5.2 - DAG rule execution, evidence levels, 19 PostgreSQL rules, 652 plans/sec*

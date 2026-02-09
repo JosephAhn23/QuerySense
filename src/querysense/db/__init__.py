@@ -11,17 +11,23 @@ Design principle: Recommendations must be validated when possible.
 """
 
 from querysense.db.probe import (
+    DBBudget,
     DBProbe,
     IndexInfo,
+    QueryStats,
     TableStats,
+    TopQueryEntry,
     get_probe,
     is_db_available,
 )
 
 __all__ = [
+    "DBBudget",
     "DBProbe",
     "IndexInfo",
+    "QueryStats",
     "TableStats",
+    "TopQueryEntry",
     "get_probe",
     "is_db_available",
 ]
