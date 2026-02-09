@@ -14,6 +14,10 @@ When it's okay:
 - Small tables (< 10K rows) where index overhead isn't worth it
 - Queries that need most of the table anyway
 - Tables that are mostly in cache
+
+SQL Enhancement:
+This rule implements the SQLEnhanceable protocol to provide better
+index recommendations when the original SQL query is available.
 """
 
 from __future__ import annotations
@@ -22,12 +26,18 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, model_validator
 
-from querysense.analyzer.index_advisor import CostEstimator, IndexRecommender
+from querysense.analyzer.index_advisor import (
+    CostEstimator,
+    IndexRecommendation,
+    IndexRecommender,
+    IndexType,
+)
 from querysense.analyzer.models import Finding, NodeContext, RulePhase, Severity
 from querysense.analyzer.registry import register_rule
-from querysense.analyzer.rules.base import Rule, RuleConfig
+from querysense.analyzer.rules.base import Rule, RuleConfig, SQLEnhanceable
 
 if TYPE_CHECKING:
+    from querysense.analyzer.sql_ast import QueryInfo
     from querysense.parser.models import ExplainOutput, PlanNode
 
 
@@ -66,15 +76,18 @@ class SeqScanConfig(RuleConfig):
 
 
 @register_rule
-class SeqScanLargeTable(Rule):
+class SeqScanLargeTable(Rule, SQLEnhanceable):
     """
     Detect sequential scans on tables exceeding a row threshold.
     
     Uses SeqScanConfig for user-configurable thresholds.
+    
+    Implements SQLEnhanceable to provide enhanced index recommendations
+    when the original SQL query is available.
     """
     
     rule_id = "SEQ_SCAN_LARGE_TABLE"
-    version = "2.0.0"  # Bumped for NodeContext
+    version = "2.1.0"  # Bumped for SQLEnhanceable
     severity = Severity.WARNING
     description = "Detects sequential scans on tables over a configurable threshold"
     config_schema = SeqScanConfig
@@ -255,3 +268,90 @@ class SeqScanLargeTable(Rule):
             f"-- If filtering is possible, add a WHERE clause and corresponding index.\n"
             f"-- Docs: {docs_url}"
         )
+    
+    def enhance_with_sql(
+        self,
+        finding: Finding,
+        query_info: "QueryInfo",
+    ) -> Finding:
+        """
+        Enhance finding with SQL-based index recommendations.
+        
+        When the original SQL query is available, we can provide much more
+        specific index recommendations including:
+        - Composite indexes covering multiple columns
+        - Correct column ordering (equality first, then range, then sort)
+        - Better column names (not just parsed from filter strings)
+        
+        Args:
+            finding: The original finding from this rule
+            query_info: Parsed information about the SQL query
+            
+        Returns:
+            Enhanced finding with better index suggestion
+        """
+        table = finding.context.relation_name
+        if not table:
+            return finding
+        
+        # Get recommended columns from SQL analysis
+        columns = query_info.suggest_composite_index(table)
+        
+        if not columns:
+            return finding
+        
+        # Build enhanced recommendation
+        rec = IndexRecommendation(
+            table=table,
+            columns=columns,
+            index_type=IndexType.BTREE,
+            estimated_improvement=finding.metrics.get("estimated_improvement", 1.0),
+            reasoning=self._build_sql_reasoning(query_info, table, columns),
+        )
+        
+        # Return new finding with enhanced suggestion
+        return finding.model_copy(update={
+            "suggestion": rec.format_full(),
+        })
+    
+    def _build_sql_reasoning(
+        self,
+        query_info: "QueryInfo",
+        table: str,
+        columns: list[str],
+    ) -> str:
+        """Build reasoning based on SQL analysis."""
+        parts: list[str] = ["Based on SQL query analysis:"]
+        
+        filter_cols = [
+            c for c in query_info.filter_columns
+            if c.table == table or c.table is None
+        ]
+        join_cols = [
+            c for c in query_info.join_columns
+            if c.table == table or c.table is None
+        ]
+        order_cols = [
+            c for c in query_info.order_by_columns
+            if c.table == table or c.table is None
+        ]
+        
+        if filter_cols:
+            equality = [c.column for c in filter_cols if c.is_equality]
+            ranges = [c.column for c in filter_cols if c.is_range]
+            if equality:
+                parts.append(f"- Equality filters on: {', '.join(equality)}")
+            if ranges:
+                parts.append(f"- Range filters on: {', '.join(ranges)}")
+        
+        if join_cols:
+            parts.append(f"- Join columns: {', '.join(c.column for c in join_cols)}")
+        
+        if order_cols:
+            parts.append(f"- Sort columns: {', '.join(c.column for c in order_cols)}")
+        
+        parts.append("")
+        parts.append(f"Recommended column order: {', '.join(columns)}")
+        parts.append("(Equality columns first, then range, then sort)")
+        
+        return "\n".join(parts)

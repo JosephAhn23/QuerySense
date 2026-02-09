@@ -10,12 +10,16 @@ Rules support two analysis signatures:
 
 If a rule implements analyze_with_context(), it will be called with the full
 RuleContext. Otherwise, analyze() is called with just explain and prior_findings.
+
+SQL Enhancement Protocol:
+Rules can optionally implement enhance_with_sql() to provide better suggestions
+when SQL query is available. This decouples rules from the analyzer.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,7 +27,53 @@ from querysense.analyzer.models import Finding, NodeContext, RulePhase, Severity
 from querysense.analyzer.path import NodePath, traverse_with_path
 
 if TYPE_CHECKING:
+    from querysense.analyzer.sql_ast import QueryInfo
+    from querysense.db.probe import DBProbe
     from querysense.parser.models import ExplainOutput, PlanNode
+
+
+@runtime_checkable
+class SQLEnhanceable(Protocol):
+    """
+    Protocol for rules that can enhance findings with SQL information.
+    
+    Rules implementing this protocol can provide better suggestions
+    when the original SQL query is available.
+    
+    Example:
+        class SeqScanLargeTable(Rule, SQLEnhanceable):
+            def enhance_with_sql(
+                self,
+                finding: Finding,
+                query_info: QueryInfo,
+            ) -> Finding:
+                # Get recommended columns from SQL analysis
+                table = finding.context.relation_name
+                if table:
+                    columns = query_info.suggest_composite_index(table)
+                    if columns:
+                        return finding.model_copy(update={
+                            "suggestion": f"CREATE INDEX ON {table}({', '.join(columns)})"
+                        })
+                return finding
+    """
+    
+    def enhance_with_sql(
+        self,
+        finding: "Finding",
+        query_info: "QueryInfo",
+    ) -> "Finding":
+        """
+        Enhance a finding with SQL-based recommendations.
+        
+        Args:
+            finding: The original finding from this rule
+            query_info: Parsed information about the SQL query
+            
+        Returns:
+            Enhanced finding with better suggestions, or original if no enhancement
+        """
+        ...
 
 
 class RuleConfig(BaseModel):
@@ -44,6 +94,51 @@ class RuleConfig(BaseModel):
     enabled: bool = True
 
 
+class RuleContext:
+    """
+    Full context for rule execution.
+    
+    Provides access to:
+    - EXPLAIN output
+    - Prior findings from earlier phases
+    - SQL query info (if available)
+    - Database probe (if available)
+    - Available capabilities
+    
+    Rules that override analyze_with_context() receive this.
+    """
+    
+    def __init__(
+        self,
+        explain: "ExplainOutput",
+        prior_findings: list[Finding] | None = None,
+        query_info: "QueryInfo | None" = None,
+        db_probe: "DBProbe | None" = None,
+        capabilities: set[str] | None = None,
+    ) -> None:
+        self.explain = explain
+        self.prior_findings = prior_findings or []
+        self.query_info: "QueryInfo | None" = query_info
+        self.db_probe: "DBProbe | None" = db_probe
+        self.capabilities = capabilities or set()
+    
+    def has_capability(self, capability: str) -> bool:
+        """Check if a capability is available."""
+        return capability in self.capabilities
+    
+    def get_table_info(self, table: str) -> Any | None:
+        """
+        Get table information from DB probe (if available).
+        
+        Returns None if DB probe is not available or data not pre-fetched.
+        Note: DB probe operations are async; table info should be
+        pre-fetched into the FactStore before rule execution.
+        """
+        if self.db_probe is None:
+            return None
+        return None
+
+
 class Rule(ABC):
     """
     Abstract base class for analyzer rules.
@@ -61,11 +156,23 @@ class Rule(ABC):
         description: One-line description for documentation
         config_schema: Pydantic model for rule configuration (default: RuleConfig)
         phase: When to run this rule (PER_NODE or AGGREGATE)
+        requires: Capabilities this rule requires (e.g., ["sql_ast", "db_probe"])
+        provides: Capabilities this rule provides for downstream rules
     
     Phases:
         PER_NODE (default): Rule analyzes individual nodes. Runs first.
         AGGREGATE: Rule analyzes patterns across the entire query.
             Receives findings from PER_NODE phase. Runs second.
+    
+    Dependencies:
+        Rules can declare dependencies via `requires` and `provides`.
+        The analyzer topologically sorts rules and SKIPS those with unmet requirements.
+        
+        Built-in capabilities:
+        - "sql_ast": SQL AST is available (parsed with pglast or sqlparse)
+        - "sql_ast_high": SQL AST with HIGH confidence (pglast)
+        - "db_probe": Database probe is available for validation
+        - "prior_findings": Findings from PER_NODE phase (automatic for AGGREGATE)
     
     Example:
         class SeqScanConfig(RuleConfig):
@@ -75,12 +182,24 @@ class Rule(ABC):
             rule_id = "SEQ_SCAN_LARGE_TABLE"
             version = "1.0.0"
             severity = Severity.WARNING
-            phase = RulePhase.PER_NODE  # Default
+            phase = RulePhase.PER_NODE
             config_schema = SeqScanConfig
+            
+            # Only run if we have SQL AST for better recommendations
+            requires: tuple[str, ...] = ()  # No requirements (runs always)
+            provides: tuple[str, ...] = ("seq_scan_findings",)
             
             def analyze(self, explain, prior_findings=[]) -> list[Finding]:
                 if node.actual_rows > self.config.threshold_rows:
                     # ... detection logic ...
+        
+        class IndexValidator(Rule):
+            rule_id = "INDEX_VALIDATOR"
+            phase = RulePhase.AGGREGATE
+            
+            # Requires DB probe to validate index recommendations
+            requires: tuple[str, ...] = ("db_probe", "seq_scan_findings")
+            provides: tuple[str, ...] = ("validated_indexes",)
     """
     
     # Subclasses must define these
@@ -94,6 +213,10 @@ class Rule(ABC):
     
     # Execution phase (subclasses can override)
     phase: RulePhase = RulePhase.PER_NODE
+    
+    # Dependency DAG: what this rule requires and provides
+    requires: tuple[str, ...] = ()  # Capabilities this rule needs
+    provides: tuple[str, ...] = ()  # Capabilities this rule provides
     
     def __init__(self, config: RuleConfig | dict[str, Any] | None = None) -> None:
         """

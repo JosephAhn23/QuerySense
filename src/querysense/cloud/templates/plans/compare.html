@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Compare Plans - QuerySense Cloud{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-900">Compare Plans</h1>
+    <p class="mt-1 text-sm text-gray-500">
+        Before: <span class="font-medium text-gray-700">{{ plan.title }}</span>
+    </p>
+</div>
+
+<!-- Plan selector -->
+<div class="bg-white shadow rounded-lg p-6 mb-6">
+    <form method="GET" action="/plans/{{ plan.id }}/compare" class="flex items-end gap-4">
+        <div class="flex-1">
+            <label for="other_id" class="block text-sm font-medium text-gray-700 mb-1">Compare with (after):</label>
+            <select name="other_id" id="other_id"
+                    class="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm">
+                <option value="">Select a plan...</option>
+                {% for op in other_plans %}
+                <option value="{{ op.id }}" {% if selected_other_id == op.id %}selected{% endif %}>
+                    {{ op.title }} ({{ op.created_at }})
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit"
+                class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+            Compare
+        </button>
+    </form>
+</div>
+
+{% if error %}
+<div class="rounded-md bg-red-50 p-4 mb-6">
+    <p class="text-sm text-red-700">{{ error }}</p>
+</div>
+{% endif %}
+
+{% if comparison %}
+<!-- Comparison Summary -->
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-4 mb-6">
+    <div class="rounded-lg bg-white p-4 shadow">
+        <dt class="text-sm font-medium text-gray-500">Fixed Issues</dt>
+        <dd class="mt-1 text-2xl font-semibold text-green-600">{{ comparison.summary.fixed_count }}</dd>
+    </div>
+    <div class="rounded-lg bg-white p-4 shadow">
+        <dt class="text-sm font-medium text-gray-500">New Issues</dt>
+        <dd class="mt-1 text-2xl font-semibold text-red-600">{{ comparison.summary.new_count }}</dd>
+    </div>
+    <div class="rounded-lg bg-white p-4 shadow">
+        <dt class="text-sm font-medium text-gray-500">Net Change</dt>
+        <dd class="mt-1 text-2xl font-semibold {% if comparison.summary.net_improvement > 0 %}text-green-600{% elif comparison.summary.net_improvement < 0 %}text-red-600{% else %}text-gray-600{% endif %}">
+            {% if comparison.summary.net_improvement > 0 %}+{% endif %}{{ comparison.summary.net_improvement }}
+        </dd>
+    </div>
+    <div class="rounded-lg bg-white p-4 shadow">
+        <dt class="text-sm font-medium text-gray-500">Unchanged</dt>
+        <dd class="mt-1 text-2xl font-semibold text-gray-600">{{ comparison.summary.unchanged_count }}</dd>
+    </div>
+</div>
+
+<!-- Overall verdict -->
+<div class="mb-6 rounded-lg p-4 {% if comparison.summary.is_improvement %}bg-green-50{% elif comparison.summary.net_improvement < 0 %}bg-red-50{% else %}bg-gray-50{% endif %}">
+    {% if comparison.summary.is_improvement %}
+    <p class="text-sm font-semibold text-green-800">
+        Improvement: {{ comparison.summary.fixed_count }} issue(s) fixed.
+    </p>
+    {% elif comparison.summary.net_improvement < 0 %}
+    <p class="text-sm font-semibold text-red-800">
+        Regression: {{ comparison.summary.new_count }} new issue(s) detected.
+    </p>
+    {% else %}
+    <p class="text-sm font-semibold text-gray-800">
+        No net change in issue count.
+    </p>
+    {% endif %}
+</div>
+
+<!-- Fixed Issues -->
+{% if comparison.fixed_issues %}
+<div class="mb-6">
+    <h2 class="text-lg font-semibold text-green-700 mb-3">Fixed Issues</h2>
+    {% for f in comparison.fixed_issues %}
+    <div class="bg-white shadow rounded-lg p-4 mb-3 border-l-4 border-green-500">
+        <h3 class="text-sm font-medium text-gray-900">{{ f.title }}</h3>
+        <p class="text-xs text-gray-500 mt-1">
+            Rule: <code>{{ f.rule_id }}</code> &middot; {{ f.severity }}
+        </p>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- New Issues -->
+{% if comparison.new_issues %}
+<div class="mb-6">
+    <h2 class="text-lg font-semibold text-red-700 mb-3">New Issues</h2>
+    {% for f in comparison.new_issues %}
+    <div class="bg-white shadow rounded-lg p-4 mb-3 border-l-4 border-red-500">
+        <h3 class="text-sm font-medium text-gray-900">{{ f.title }}</h3>
+        <p class="text-xs text-gray-500 mt-1">
+            Rule: <code>{{ f.rule_id }}</code> &middot; {{ f.severity }}
+        </p>
+        {% if f.suggestion %}
+        <pre class="code-block text-xs mt-2">{{ f.suggestion }}</pre>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Changed Issues -->
+{% if comparison.changed_issues %}
+<div class="mb-6">
+    <h2 class="text-lg font-semibold text-amber-700 mb-3">Changed Issues</h2>
+    {% for ci in comparison.changed_issues %}
+    <div class="bg-white shadow rounded-lg p-4 mb-3 border-l-4 border-amber-500">
+        <h3 class="text-sm font-medium text-gray-900">{{ ci.finding.title }}</h3>
+        <p class="text-xs text-gray-500 mt-1">Status: {{ ci.status }}</p>
+        {% if ci.before_metrics and ci.after_metrics %}
+        <div class="mt-2 grid grid-cols-2 gap-4 text-xs">
+            <div>
+                <span class="font-medium text-gray-500">Before:</span>
+                {% for k, v in ci.before_metrics.items() %}
+                <span class="ml-2">{{ k }}={{ v }}</span>
+                {% endfor %}
+            </div>
+            <div>
+                <span class="font-medium text-gray-500">After:</span>
+                {% for k, v in ci.after_metrics.items() %}
+                <span class="ml-2">{{ k }}={{ v }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% endif %}
+
+<div class="mt-6">
+    <a href="/plans/{{ plan.id }}" class="text-sm text-indigo-600 hover:text-indigo-500">&larr; Back to plan</a>
+</div>
+{% endblock %}

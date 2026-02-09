@@ -1,0 +1,53 @@
+# Docker Compose for QuerySense development and testing
+# Usage:
+#   docker-compose up -d              # Start databases
+#   docker-compose exec postgres psql # Connect to Postgres
+#   docker-compose exec mysql mysql -p# Connect to MySQL
+#   docker-compose down               # Stop all
+
+version: "3.8"
+
+services:
+  # PostgreSQL 16 for testing
+  postgres:
+    image: postgres:16-alpine
+    container_name: querysense-postgres
+    environment:
+      POSTGRES_USER: querysense
+      POSTGRES_PASSWORD: querysense
+      POSTGRES_DB: testdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/db/postgres_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U querysense -d testdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # MySQL 8.0 for testing
+  mysql:
+    image: mysql:8.0
+    container_name: querysense-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: querysense
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: querysense
+      MYSQL_PASSWORD: querysense
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/db/mysql_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "querysense", "-pquerysense"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    command: --default-authentication-plugin=mysql_native_password
+
+volumes:
+  postgres_data:
+  mysql_data:

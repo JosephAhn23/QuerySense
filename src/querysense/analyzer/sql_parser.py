@@ -1,22 +1,20 @@
 """
-SQL Query Parser for Enhanced Index Recommendations.
+Internal sqlparse-based SQL parser adapter.
+
+This is the heuristic fallback backend for SQL analysis.  It is used
+automatically by :class:`~querysense.analyzer.sql_ast.SQLASTParser`
+when *pglast* is not installed.
+
+**External consumers should import from** ``querysense.analyzer.sql_ast``
+rather than directly from this module.  The data models
+(``ColumnInfo``, ``ColumnUsage``, ``QueryInfo``) defined here are
+re-exported through the public ``sql_ast`` port.
 
 Parses SQL queries to extract:
 - Filter columns from WHERE clauses
 - Join columns from JOIN conditions
 - Sort columns from ORDER BY
 - Group columns from GROUP BY
-
-This enables QuerySense to provide specific index recommendations
-even when the EXPLAIN output doesn't clearly show column names.
-
-Usage:
-    from querysense.analyzer.sql_parser import SQLQueryAnalyzer
-    
-    analyzer = SQLQueryAnalyzer()
-    query_info = analyzer.analyze("SELECT * FROM orders WHERE status = 'pending'")
-    
-    print(query_info.filter_columns)  # [ColumnInfo(table='orders', column='status', ...)]
 """
 
 from __future__ import annotations
